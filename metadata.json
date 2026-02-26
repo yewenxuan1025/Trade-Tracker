@@ -1,0 +1,5 @@
+{
+  "name": "Trade Tracker",
+  "description": "A comprehensive trading journal and portfolio management application. Begins with a robust Lookup module for analyzing stock data and market constants from Excel records.",
+  "requestFramePermissions": []
+}
