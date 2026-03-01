@@ -339,6 +339,7 @@ const App: React.FC = () => {
         else if (section === 'transaction') setTransactions(result.transactions);
         else if (section === 'option_transaction') setOptionTransactions(result.optionTransactions);
         else if (section === 'pnl') setPnlData(result.pnl);
+        else if (section === 'nav') setNavData(result.navData);
     } catch (e) { alert("Error uploading " + section + ": " + (e as Error).message); }
   };
 
@@ -361,7 +362,8 @@ const App: React.FC = () => {
         historyNonHk,
         analysis.detailedHoldingsExport,
         analysis.weightedAvgs,
-        navData
+        navData,
+        optionTransactions
     ); 
   };
 
@@ -414,7 +416,14 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'lookup' && (
-              <StockTable stocks={lookupData?.stocks || []} onStockUpdate={(idx, f, v) => { if (lookupData) { const newStocks = [...lookupData.stocks]; newStocks[idx] = { ...newStocks[idx], [f]: v }; setLookupData({ ...lookupData, stocks: newStocks }); } }} onExport={() => exportToExcel(lookupData?.stocks || [])} onUpload={(f) => handleSingleUpload('lookup', f)} />
+              <StockTable 
+                stocks={lookupData?.stocks || []} 
+                onStockAdd={(s) => { if(lookupData) setLookupData({...lookupData, stocks: [...lookupData.stocks, s]}); }}
+                onStockEdit={(i, s) => { if(lookupData) { const n = [...lookupData.stocks]; n[i] = s; setLookupData({...lookupData, stocks: n}); } }}
+                onStockDelete={(idxs) => { if(lookupData) { const s = new Set(idxs); setLookupData({...lookupData, stocks: lookupData.stocks.filter((_, i) => !s.has(i))}); } }}
+                onExport={() => exportToExcel(lookupData?.stocks || [])} 
+                onUpload={(f) => handleSingleUpload('lookup', f)} 
+              />
             )}
             {activeTab === 'transactions' && (
               <TransactionTable 
@@ -424,7 +433,19 @@ const App: React.FC = () => {
                 onExport={() => exportTransactionsToExcel(transactions, optionTransactions)} 
                 onUpload={(f) => handleSingleUpload('transaction', f)}
                 onUploadOptions={(f) => handleSingleUpload('option_transaction', f)}
-                onSplitTransaction={(id, s1, s2) => { const original = transactions.find(t => t.id === id); if (!original) return; const t1 = { ...original, ...s1, id: generateId() }; const t2 = { ...original, ...s2, id: generateId() }; setTransactions(prev => [...prev.filter(t => t.id !== id), t1, t2]); }} 
+                onSplitTransaction={(id, s1, s2) => {
+                    setTransactions(prev => {
+                        const index = prev.findIndex(t => t.id === id);
+                        if (index === -1) return prev;
+                        const original = prev[index];
+                        // Ensure unique IDs by adding a random suffix or delay
+                        const t1 = { ...original, ...s1, id: generateId() + '_1' };
+                        const t2 = { ...original, ...s2, id: generateId() + '_2' };
+                        const newTxns = [...prev];
+                        newTxns.splice(index, 1, t1, t2);
+                        return newTxns;
+                    });
+                }} 
                 onCreatePnL={handleCreatePnL} 
                 onCreateOptionPnL={handleCreateOptionPnL}
                 onAddTransaction={handleAddTransaction} 
@@ -440,7 +461,7 @@ const App: React.FC = () => {
               <PnLTable data={pnlData} onExport={() => exportPnLToExcel(pnlData, marketConstants)} onUpload={(f) => handleSingleUpload('pnl', f)} onEditRecord={handleEditPnL} onDeleteRecord={handleDeletePnL} />
             )}
             {activeTab === 'nav' && (
-              <NavDashboard data={navData} onUpdate={setNavData} />
+              <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} />
             )}
             {activeTab === 'history' && (
               <HistoryDashboard 

@@ -48,7 +48,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
   const [colWidths, setColWidths] = useState<Record<string, number>>({
     select: 40, date: 90, ticker: 100, type: 100, category: 100, class: 100,
     pe: 80, pb: 80, div: 80, roe: 80, ps: 80,
-    holdingsUsd: 110, holdingsPct: 90, pnlPct: 90, currentCost: 100
+    shares: 90, holdingsUsd: 110, holdingsPct: 90, pnl: 100, pnlPct: 90, currentCost: 100
   });
 
   const handleResizeStart = (e: React.MouseEvent, key: string) => {
@@ -107,6 +107,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     });
 
     const totalTrades = winCount + lossCount;
+    const localTotalPnlUsd = totalWinUsd + totalLossUsd;
 
     // Median Calculation
     const calculateMedian = (values: number[]) => {
@@ -129,16 +130,17 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     }).sort((a, b) => b.pnl - a.pnl);
 
     // 3. Group 2 (Current Holdings) Calculation with Cost Basis
-    const holdingMap = new Map<string, { shares: number; totalCostLocal: number; market: string; isCCS: boolean; totalCashFlowLocal: number }>();
+    const holdingMap = new Map<string, { shares: number; totalCostLocal: number; market: string; isCCS: boolean; totalCashFlowLocal: number; name: string }>();
     const sortedTxns = [...transactions].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
     sortedTxns.forEach(t => {
         const stock = t.stock.toUpperCase().trim();
         if (!stock) return;
-        const current = holdingMap.get(stock) || { shares: 0, totalCostLocal: 0, market: t.market || 'US', isCCS: false, totalCashFlowLocal: 0 };
+        const current = holdingMap.get(stock) || { shares: 0, totalCostLocal: 0, market: t.market || 'US', isCCS: false, totalCashFlowLocal: 0, name: t.name || '' };
         
         // Update static data if not set (or update market from latest txn)
         if (!current.market) current.market = t.market || 'US';
+        if (!current.name && t.name) current.name = t.name;
         
         const action = (t.action || '').toLowerCase();
         const price = t.price || 0;
@@ -167,6 +169,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
             if (lookup) {
                 current.isCCS = lookup.isChinese === 'Y';
                 if (lookup.market) current.market = lookup.market;
+                if (lookup.companyName) current.name = lookup.companyName;
             }
         }
         holdingMap.set(stock, current);
@@ -211,6 +214,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
 
         g2Data.push({
             stock,
+            name: data.name,
             shares: data.shares,
             avgCost: avgCostDisplay, // In Display Currency
             actualCost: actualCostDisplay, // In Display Currency
@@ -235,8 +239,8 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         return { ...d, pnl, pnlPct, mvPct };
     });
 
-    // Default Sort by Last MV descending
-    g2Final.sort((a, b) => b.lastMv - a.lastMv);
+    // Sort by Ticker alphabetical
+    g2Final.sort((a, b) => a.stock.localeCompare(b.stock));
 
     // Filter and Sort Groups
     const hkHoldings = g2Final.filter(d => d.market === 'HK');
@@ -289,11 +293,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
 
     return {
       metrics: {
-        totalPnlUsd: analysis.totalPnlUsd,
+        totalPnlUsd: localTotalPnlUsd,
         totalTrades,
         winRate: totalTrades > 0 ? (winCount / totalTrades) * 100 : 0,
         profitFactor: Math.abs(totalLossUsd) > 0 ? totalWinUsd / Math.abs(totalLossUsd) : (totalWinUsd > 0 ? Infinity : 0),
-        avgPnl: totalTrades > 0 ? analysis.totalPnlUsd / totalTrades : 0,
+        avgPnl: totalTrades > 0 ? localTotalPnlUsd / totalTrades : 0,
         totalPortfolioMv: grandTotalPortfolio,
         allWinners: winnersLosers.filter(s => s.pnl > 0),
         allLosers: winnersLosers.slice().reverse().filter(s => s.pnl < 0),
@@ -403,6 +407,13 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     </div>
   );
 
+  const formatPrice = (val: number) => {
+      if (isNaN(val)) return '0.00';
+      return Math.abs(val) < 1 && Math.abs(val) > 0 
+        ? val.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) 
+        : val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
   const Group2Table = ({ title, data, displayCurrency }: { title: string, data: any[], displayCurrency: string }) => {
     // Calculate Totals for Subtotal Row
     const totalCost = data.reduce((acc, r) => acc + r.totalCost, 0);
@@ -425,6 +436,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
             <thead className="bg-slate-100/80 sticky top-0 z-10">
               <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b align-bottom">
                 <th className="py-2 px-3 w-20 sticky left-0 bg-slate-100 z-20 border-r text-left">Stock</th>
+                <th className="py-2 px-3 w-40 text-left">Name</th>
                 <th className="py-2 px-3 w-20 text-right">Shares</th>
                 <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight">Total Cost (USD)</th>
                 <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight">Avg Cost ({displayCurrency})</th>
@@ -441,18 +453,19 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               {data.map(row => (
                 <tr key={row.stock} className="hover:bg-slate-50 transition-colors group">
                   <td className="py-1.5 px-3 font-black text-blue-600 sticky left-0 bg-white z-10 border-r group-hover:bg-slate-50">{row.stock}</td>
+                  <td className="py-1.5 px-3 text-left font-bold text-slate-500 text-[10px] whitespace-nowrap overflow-hidden text-ellipsis max-w-[160px]" title={row.name}>{row.name}</td>
                   <td className="py-1.5 px-3 text-right font-mono whitespace-nowrap">{row.shares.toLocaleString()}</td>
                   <td className="py-1.5 px-3 text-right font-mono text-slate-600 font-bold whitespace-nowrap">
                       ${row.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono text-slate-600 font-bold whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{row.avgCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.avgCost)}
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono text-emerald-600 font-bold whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{row.actualCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.actualCost)}
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono font-black text-slate-900 whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{row.lastPrice.toFixed(2)}
+                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.lastPrice)}
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono font-black text-slate-800 whitespace-nowrap">
                       ${row.lastMv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
@@ -474,6 +487,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               {/* SUBTOTAL ROW */}
               <tr className="bg-slate-100/70 border-t-2 border-slate-200 font-bold">
                   <td className="py-2 px-3 sticky left-0 bg-slate-100/70 z-10 border-r font-black text-slate-700 uppercase tracking-wider">Subtotal</td>
+                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
                   <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
                   <td className="py-2 px-3 text-right font-mono text-slate-800">${totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
                   <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
@@ -802,8 +816,10 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                             <ResizableHeader label="Div Yld" field="div" />
                             <ResizableHeader label="ROE" field="roe" />
                             <ResizableHeader label="PS" field="ps" />
+                            <ResizableHeader label="Shares" field="shares" />
                             <ResizableHeader label="Holdings (USD)" field="holdingsUsd" />
                             <ResizableHeader label="Holdings %" field="holdingsPct" />
+                            <ResizableHeader label="P&L (USD)" field="pnl" />
                             <ResizableHeader label="P&L %" field="pnlPct" />
                         </tr>
                     </thead>
@@ -840,8 +856,10 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                                     <td className="py-1.5 px-3 text-right font-mono text-[10px]">{h.div.toFixed(2)}</td>
                                     <td className="py-1.5 px-3 text-right font-mono text-[10px]">{h.roe.toFixed(2)}</td>
                                     <td className="py-1.5 px-3 text-right font-mono text-[10px]">{h.ps.toFixed(2)}</td>
+                                    <td className="py-1.5 px-3 text-right font-mono text-[10px]">{h.shares.toLocaleString()}</td>
                                     <td className="py-1.5 px-3 text-right font-mono font-bold text-slate-800 text-[10px]">{h.lastMv.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                                     <td className="py-1.5 px-3 text-right font-mono text-slate-500 text-[10px]">{h.mvPct.toFixed(2)}%</td>
+                                    <td className={`py-1.5 px-3 text-right font-mono font-bold text-[10px] ${h.pnl >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>{h.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                                     <td className={`py-1.5 px-3 text-right font-mono font-bold text-[10px] ${h.pnlPct >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>{h.pnlPct.toFixed(2)}%</td>
                                 </tr>
                             );

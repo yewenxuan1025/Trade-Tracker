@@ -216,7 +216,7 @@ export const NAV_HEADER_MAP: Record<string, keyof NavData> = {
 // Dropdown Options
 export const TYPE_OPTIONS = ['Trading', 'Long-Term', 'Event', 'Allocation'];
 export const CATEGORY_OPTIONS = ['Cyclical', 'Value', 'Growth', 'Turnaround'];
-export const CLASS_OPTIONS = ['US Stock', 'CCS', 'HK Stock', 'Crypto', 'ETF'];
-export const MARKET_OPTIONS = ['US', 'HK', 'SG', 'AUD'];
+export const CLASS_OPTIONS = ['US Stock', 'CCS', 'HK Stock', 'Crypto', 'ETF', 'AUS Stock'];
+export const MARKET_OPTIONS = ['US', 'HK', 'SG', 'AUS'];
 export const IS_CCS_OPTIONS = ['Y', 'N'];
 export const EXERCISE_OPTIONS = ['No', 'Yes', 'Buy to Cover', 'Close Position'];

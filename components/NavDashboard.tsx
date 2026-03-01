@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent } from 'lucide-react';
+import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent, Upload } from 'lucide-react';
 import { NavData } from '../types';
 import { generateId } from '../services/excelService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
@@ -7,9 +7,10 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 interface NavDashboardProps {
   data: NavData[];
   onUpdate: (data: NavData[]) => void;
+  onUpload: (file: File) => void;
 }
 
-const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate }) => {
+const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newRecord, setNewRecord] = useState<Partial<NavData>>({ date: new Date().toISOString().split('T')[0], aum: 0 });
@@ -129,17 +130,17 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate }) => {
                 <div className="space-y-4">
                     <div>
                         <p className="text-sm text-slate-400">Current AUM</p>
-                        <p className="text-2xl font-bold text-slate-800">${sortedData[sortedData.length - 1]?.aum.toLocaleString() || '0.00'}</p>
+                        <p className="text-2xl font-bold text-slate-800">${(sortedData[sortedData.length - 1]?.aum || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
                     </div>
                     <div>
                         <p className="text-sm text-slate-400">Cumulative Return</p>
-                        <p className={`text-2xl font-bold ${sortedData[sortedData.length - 1]?.cumulativeReturn >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                            {(sortedData[sortedData.length - 1]?.cumulativeReturn * 100).toFixed(2)}%
+                        <p className={`text-2xl font-bold ${(sortedData[sortedData.length - 1]?.cumulativeReturn || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                            {((sortedData[sortedData.length - 1]?.cumulativeReturn || 0) * 100).toFixed(2)}%
                         </p>
                     </div>
                     <div>
                         <p className="text-sm text-slate-400">Latest NAV</p>
-                        <p className="text-2xl font-bold text-slate-800">{sortedData[sortedData.length - 1]?.nav2.toFixed(4) || '0.0000'}</p>
+                        <p className="text-2xl font-bold text-slate-800">{(sortedData[sortedData.length - 1]?.nav2 || 0).toFixed(4)}</p>
                     </div>
                 </div>
             </div>
@@ -150,9 +151,15 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate }) => {
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center">
           <h3 className="text-lg font-bold text-slate-800">Daily NAV Records</h3>
-          <button onClick={() => setIsAdding(true)} className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-            <Plus size={16} /><span>Add Record</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <label className="flex items-center space-x-2 px-4 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer">
+              <Upload size={16} /><span>Upload</span>
+              <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
+            </label>
+            <button onClick={() => setIsAdding(true)} className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+              <Plus size={16} /><span>Add Record</span>
+            </button>
+          </div>
         </div>
         
         {isAdding && (
@@ -216,9 +223,9 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate }) => {
                             />
                         ) : `$${item.aum.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}
                     </td>
-                    <td className="px-6 py-4 font-mono text-slate-600">{item.nav2.toFixed(4)}</td>
-                    <td className={`px-6 py-4 font-mono font-medium ${item.cumulativeReturn >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                        {(item.cumulativeReturn * 100).toFixed(2)}%
+                    <td className="px-6 py-4 font-mono text-slate-600">{(item.nav2 || 0).toFixed(4)}</td>
+                    <td className={`px-6 py-4 font-mono font-medium ${(item.cumulativeReturn || 0) >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                        {((item.cumulativeReturn || 0) * 100).toFixed(2)}%
                     </td>
                     <td className="px-6 py-4 text-slate-500">
                         {editingId === item.id ? (

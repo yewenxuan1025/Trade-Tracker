@@ -80,6 +80,23 @@ const TRANSACTION_EXPORT_MAP: Record<string, string> = {
     exercise: 'Exercise'
 };
 
+const OPTION_EXPORT_MAP: Record<string, string> = {
+    stock: 'Stock',
+    name: 'Name',
+    market: 'Market',
+    action: 'Action',
+    price: 'Price',
+    shares: 'Shares',
+    date: 'Date',
+    commission: 'Commission',
+    total: 'Total',
+    source: 'Source',
+    option: 'Option',
+    expiration: 'Expiration',
+    strike: 'Strike',
+    exercise: 'Exercise'
+};
+
 const PNL_EXPORT_MAP: Record<string, string> = {
     tradeNumber: 'No.',
     stock: 'Stock',
@@ -465,7 +482,28 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         }
         
         // --- PARSE NAV-DAILY SHEET ---
-        const navSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'nav-daily');
+        let navSheetName = workbook.SheetNames.find(name => {
+            const n = name.trim().toLowerCase();
+            return n === 'nav-daily' || n === 'daily nav' || n === 'nav' || n === 'daily';
+        });
+
+        // Fallback: Check if any sheet has NAV headers if not found by name
+        if (!navSheetName) {
+             for (const name of workbook.SheetNames) {
+                 const sheet = workbook.Sheets[name];
+                 const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+                 // Check first 10 rows for NAV headers
+                 for (let i = 0; i < Math.min(jsonData.length, 10); i++) {
+                     const row = jsonData[i];
+                     if (row && row.some(cell => typeof cell === 'string' && (cell.trim() === 'AUM' || cell.trim() === 'NAV1'))) {
+                         navSheetName = name;
+                         break;
+                     }
+                 }
+                 if (navSheetName) break;
+             }
+        }
+
         let navData: NavData[] = [];
         if (navSheetName) {
             const sheet = workbook.Sheets[navSheetName];
@@ -692,8 +730,10 @@ export const calculatePortfolioAnalysis = (
             'Div Yield': l?.dividendYield || 0,
             'ROE': l?.roeTTM || 0,
             'PS': l?.psQuantile || 0,
+            'Shares': h.Shares,
             'Holdings (USD)': h.LastMV,
             'Holdings %': h.MVPct,
+            'P&L (USD)': h.PnL,
             'P&L %': h.PnLPct,
             // Internal for calculation
             _pe: l?.peTTM || 0,
@@ -831,6 +871,7 @@ export const exportGlobalData = (
     detailedHoldings: any[],
     weightedAvgs: any,
     navData: NavData[],
+    optionTransactions: TransactionData[] = [],
     fileName: string = 'TradeTracker_Pro_Export.xlsx'
 ) => {
     const workbook = XLSX.utils.book_new();
@@ -999,8 +1040,10 @@ export const exportGlobalData = (
             'Div Yield': weightedAvgs.div,
             'ROE': weightedAvgs.roe,
             'PS': weightedAvgs.ps,
+            'Shares': '',
             'Holdings (USD)': weightedAvgs.holdingsUsd,
             'Holdings %': weightedAvgs.holdingsPct,
+            'P&L (USD)': '',
             'P&L %': ''
         });
 
@@ -1022,6 +1065,14 @@ export const exportGlobalData = (
     const txnWs = XLSX.utils.json_to_sheet(mappedTxns);
     formatWorksheet(txnWs, mappedTxns);
     XLSX.utils.book_append_sheet(workbook, txnWs, "Transaction");
+
+    // 4.1 OPTION TRANSACTIONS
+    if (optionTransactions && optionTransactions.length > 0) {
+        const mappedOptTxns = mapToExport(optionTransactions, OPTION_EXPORT_MAP);
+        const optTxnWs = XLSX.utils.json_to_sheet(mappedOptTxns);
+        formatWorksheet(optTxnWs, mappedOptTxns);
+        XLSX.utils.book_append_sheet(workbook, optTxnWs, "Transactions_Option");
+    }
 
     // 5. P&L (SPLIT)
     const stockPnl = pnlData.filter(r => !r.option || !['Call', 'Put'].includes(r.option));

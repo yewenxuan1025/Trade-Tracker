@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PnLData, MarketConstants } from '../types';
-import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X } from 'lucide-react';
+import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
 
 interface PnLTableProps {
   data: PnLData[];
@@ -410,6 +410,10 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
                     <span className="text-[10px] font-extrabold text-slate-400 uppercase flex items-center gap-1"><Percent size={12} /> Loss:</span>
                     <input type="number" value={targetLossPct} onChange={e => setTargetLossPct(parseFloat(e.target.value) || 0)} className="w-16 text-xs border border-slate-200 rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-emerald-500 bg-white shadow-sm"/>
                 </div>
+                <label className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-medium shadow-sm transition-all cursor-pointer">
+                    <Upload size={14} />Upload
+                    <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
+                </label>
                 <button onClick={onExport} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Download size={14} />Export</button>
             </div>
         </div>
