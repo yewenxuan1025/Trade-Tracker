@@ -110,10 +110,101 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAppendProcess = async (file: File) => {
+    setIsProcessing(true);
+    try {
+      const result = await parseExcelFile(file);
+      
+      // 1. Merge Lookup Data (from both Lookup sheet and Transactions)
+      setLookupData(prev => {
+          let currentStocks = prev ? [...prev.stocks] : [];
+          if (!prev && result.lookup) currentStocks = [...result.lookup.stocks];
+          
+          const stockMap = new Map<string, StockData>();
+          currentStocks.forEach(s => stockMap.set(s.ticker.toUpperCase(), s));
+          
+          // Merge from result.lookup (if any)
+          if (result.lookup) {
+               result.lookup.stocks.forEach(s => {
+                  if (!stockMap.has(s.ticker.toUpperCase())) {
+                      stockMap.set(s.ticker.toUpperCase(), s);
+                      currentStocks.push(s);
+                  }
+               });
+          }
+
+          // Merge from result.transactions (infer missing)
+          result.transactions.forEach(txn => {
+              if (!txn.stock) return;
+              const ticker = txn.stock.toUpperCase();
+              let stock = stockMap.get(ticker);
+              
+              if (!stock) {
+                  // Create new stock entry if it doesn't exist
+                  const newStock: StockData = {
+                      ticker: ticker,
+                      companyName: txn.name || ticker,
+                      market: txn.market || '',
+                      type: txn.type || '',
+                      category: txn.category || '',
+                      class: txn.class || '',
+                      isChinese: 'N',
+                      tradingCode: '',
+                      closePrice: 0,
+                      marketCap: 0,
+                      peTTM: 0,
+                      pb: 0,
+                      dividendYield: 0,
+                      roeTTM: 0,
+                      psQuantile: 0
+                  };
+                  stockMap.set(ticker, newStock);
+                  currentStocks.push(newStock);
+              } else {
+                  // Update missing fields if transaction has them
+                  if (!stock.type && txn.type) stock.type = txn.type;
+                  if (!stock.category && txn.category) stock.category = txn.category;
+                  if (!stock.class && txn.class) stock.class = txn.class;
+                  if (!stock.market && txn.market) stock.market = txn.market;
+                  if ((!stock.companyName || stock.companyName === ticker) && txn.name) stock.companyName = txn.name;
+              }
+          });
+          
+          return { 
+              stocks: currentStocks, 
+              lastUpdated: new Date() 
+          };
+      });
+
+      // 2. Append Transactions
+      setTransactions(prev => [...prev, ...result.transactions]);
+      
+      // 3. Append Option Transactions
+      setOptionTransactions(prev => [...prev, ...result.optionTransactions]);
+
+      // 4. Append PnL
+      setPnlData(prev => [...prev, ...result.pnl]);
+
+      // 5. Append NAV (deduplicate by date)
+      setNavData(prev => {
+          const existingDates = new Set(prev.map(n => n.date));
+          const newNavs = result.navData.filter(n => !existingDates.has(n.date));
+          return [...prev, ...newNavs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      });
+
+      setIsUploading(false);
+      alert(`Successfully appended ${result.transactions.length} transactions and ${result.optionTransactions.length} option transactions.`);
+    } catch (error) {
+      alert("Error parsing file for append: " + (error as Error).message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleCreatePnL = useCallback((ids: string[]) => {
       if (ids.length !== 2) return;
-      const t1 = transactions.find(t => t.id === ids[0]);
-      const t2 = transactions.find(t => t.id === ids[1]);
+      const t1 = transactions.find(t => String(t.id) === String(ids[0]));
+      const t2 = transactions.find(t => String(t.id) === String(ids[1]));
       if (!t1 || !t2) return;
 
       if (t1.stock.toUpperCase() !== t2.stock.toUpperCase()) {
@@ -153,14 +244,14 @@ const App: React.FC = () => {
       };
 
       setPnlData(prev => [...prev, newPnl]);
-      setTransactions(prev => prev.filter(t => !ids.includes(t.id)));
+      setTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
       alert("Successfully created Stock P&L record!");
   }, [transactions, pnlData]);
 
   const handleCreateOptionPnL = useCallback((ids: string[]) => {
     if (ids.length !== 2) return;
-    const t1 = optionTransactions.find(t => t.id === ids[0]);
-    const t2 = optionTransactions.find(t => t.id === ids[1]);
+    const t1 = optionTransactions.find(t => String(t.id) === String(ids[0]));
+    const t2 = optionTransactions.find(t => String(t.id) === String(ids[1]));
     if (!t1 || !t2) return;
 
     // Validate Pairing Logic for Options
@@ -241,7 +332,7 @@ const App: React.FC = () => {
     };
 
     setPnlData(prev => [...prev, newPnl]);
-    setOptionTransactions(prev => prev.filter(t => !ids.includes(t.id)));
+    setOptionTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
     alert("Successfully created Option P&L record!");
   }, [optionTransactions, pnlData]);
 
@@ -273,14 +364,14 @@ const App: React.FC = () => {
   }, []);
 
   const handleDeleteTransaction = useCallback((idOrIds: string | string[]) => {
-      const idsToRemove = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+      const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
-      setTransactions(prev => prev.filter(t => !idSet.has(t.id)));
+      setTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
   }, []);
 
   const handleDuplicateTransaction = useCallback((id: string) => {
       setTransactions(prev => {
-          const original = prev.find(t => t.id === id);
+          const original = prev.find(t => String(t.id) === String(id));
           if (!original) return prev;
           const copy = { ...original, id: generateId() };
           return [...prev, copy];
@@ -312,13 +403,13 @@ const App: React.FC = () => {
   }, []);
 
   const handleEditOptionTransaction = useCallback((id: string, updated: Partial<TransactionData>) => {
-      setOptionTransactions(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
+      setOptionTransactions(prev => prev.map(t => String(t.id) === String(id) ? { ...t, ...updated } : t));
   }, []);
 
   const handleDeleteOptionTransaction = useCallback((idOrIds: string | string[]) => {
-      const idsToRemove = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+      const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
-      setOptionTransactions(prev => prev.filter(t => !idSet.has(t.id)));
+      setOptionTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
   }, []);
 
 
@@ -433,9 +524,10 @@ const App: React.FC = () => {
                 onExport={() => exportTransactionsToExcel(transactions, optionTransactions)} 
                 onUpload={(f) => handleSingleUpload('transaction', f)}
                 onUploadOptions={(f) => handleSingleUpload('option_transaction', f)}
+                onAppend={handleAppendProcess}
                 onSplitTransaction={(id, s1, s2) => {
                     setTransactions(prev => {
-                        const index = prev.findIndex(t => t.id === id);
+                        const index = prev.findIndex(t => String(t.id) === String(id));
                         if (index === -1) return prev;
                         const original = prev[index];
                         // Ensure unique IDs by adding a random suffix or delay

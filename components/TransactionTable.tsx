@@ -11,6 +11,7 @@ interface TransactionTableProps {
   onExport: () => void;
   onUpload: (file: File) => void;
   onUploadOptions?: (file: File) => void;
+  onAppend?: (file: File) => void;
   onSplitTransaction: (originalId: string, split1: { shares: number; commission: number; total: number; lastMv: number }, split2: { shares: number; commission: number; total: number; lastMv: number }) => void;
   onCreatePnL: (ids: string[]) => void;
   onCreateOptionPnL?: (ids: string[]) => void;
@@ -30,6 +31,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
     onExport, 
     onUpload, 
     onUploadOptions,
+    onAppend,
+    onSplitTransaction,
     onCreatePnL, 
     onCreateOptionPnL,
     onAddTransaction, 
@@ -45,6 +48,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
+  const appendInputRef = useRef<HTMLInputElement>(null);
 
   const [colWidths, setColWidths] = useState<Record<string, number>>({ 
     stock: 110, name: 160, market: 80, action: 80, price: 100, shares: 100, date: 105, commission: 85, total: 115, source: 120, lastPrice: 100, lastMv: 115,
@@ -68,7 +72,16 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   });
 
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
-  const [splitForm, setSplitForm] = useState<{ split1Shares: number }>({ split1Shares: 0 });
+  const [splitForm, setSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
+
+  useEffect(() => {
+      if (isSplitModalOpen && editingId) {
+          const txn = transactions.find(t => t.id === editingId);
+          if (txn) {
+              setSplitForm({ split1Shares: txn.shares / 2 });
+          }
+      }
+  }, [isSplitModalOpen, editingId]);
 
   const handleSplitSubmit = (e: React.FormEvent) => {
       e.preventDefault();
@@ -83,8 +96,14 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
           alert("Split parts cannot be zero");
           return;
       }
+      
+      // Allow negative shares (for short positions), but ensure we don't divide by zero
+      if (original.shares === 0) {
+          alert("Original shares cannot be zero");
+          return;
+      }
 
-      const ratio = original.shares !== 0 ? s1Shares / original.shares : 0;
+      const ratio = s1Shares / original.shares;
       const s1Comm = original.commission * ratio;
       const s2Comm = original.commission - s1Comm;
 
@@ -298,6 +317,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
       {/* --- STOCK TRANSACTIONS --- */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-[600px] relative">
         <input type="file" ref={fileInputRef} onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); e.target.value = ''; }} accept=".xlsx, .xls" className="hidden" />
+        <input type="file" ref={appendInputRef} onChange={(e) => { if(e.target.files?.[0] && onAppend) onAppend(e.target.files[0]); e.target.value = ''; }} accept=".xlsx, .xls" className="hidden" />
         
         <div className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm flex-shrink-0">
             <div className="p-4 flex flex-col gap-4">
@@ -305,6 +325,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div><h2 className="text-lg font-bold text-slate-800">Stock Transactions</h2><p className="text-xs text-slate-500">{filtered.length} records</p></div>
                 <div className="flex gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Upload size={14} /><span>Upload</span></button>
+                  {onAppend && <button onClick={() => appendInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Plus size={14} /><span>Append</span></button>}
                   <button onClick={() => { setEditingId(null); setTxnForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS' }); setIsModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Record</span></button>
                   
                   {selectedIds.size > 0 && (
@@ -314,7 +335,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                     <>
                       <button onClick={() => { const id = Array.from(selectedIds)[0]; onDuplicateTransaction(id); setSelectedIds(new Set()); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Copy size={14} /><span>Duplicate</span></button>
                       <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setTxnForm({...txn}); setIsModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
-                      <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setSplitForm({ split1Shares: txn.shares / 2 }); setIsSplitModalOpen(true); } }} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Scissors size={14} /><span>Split</span></button>
+                      <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setIsSplitModalOpen(true); } }} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Scissors size={14} /><span>Split</span></button>
                     </>
                   )}
                   {selectedIds.size === 2 && (
@@ -524,16 +545,17 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
               <button onClick={() => setIsSplitModalOpen(false)} className="hover:bg-slate-200 p-1.5 rounded-full transition-colors"><X size={20}/></button>
             </div>
             <form onSubmit={handleSplitSubmit} className="p-6 space-y-4">
-              {(() => {
-                  const original = transactions.find(t => t.id === editingId);
-                  if (!original) return null;
-                  const s1Shares = Number(splitForm.split1Shares);
-                  const s2Shares = original.shares - s1Shares;
-                  const ratio = original.shares > 0 ? s1Shares / original.shares : 0;
-                  const s1Comm = original.commission * ratio;
-                  const s2Comm = original.commission - s1Comm;
-                  
-                  return (
+                {(() => {
+                   const original = transactions.find(t => t.id === editingId);
+                   if (!original) return <div className="text-red-500">Transaction not found</div>;
+                   
+                   const s1Shares = Number(splitForm.split1Shares);
+                   const s2Shares = original.shares - s1Shares;
+                   const ratio = original.shares !== 0 ? s1Shares / original.shares : 0;
+                   const s1Comm = original.commission * ratio;
+                   const s2Comm = original.commission - s1Comm;
+
+                   return (
                     <>
                         <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-4">
                             <div className="flex justify-between text-xs mb-1"><span className="text-slate-500">Original Shares:</span><span className="font-mono font-bold">{original.shares}</span></div>
@@ -542,7 +564,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
 
                         <div>
                             <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Split 1 Shares</label>
-                            <input required type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-bold text-blue-600" value={splitForm.split1Shares} onChange={e => setSplitForm({ split1Shares: parseFloat(e.target.value) })}/>
+                            <input required type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-bold text-blue-600" value={splitForm.split1Shares} onChange={e => setSplitForm({ split1Shares: e.target.value === '' ? '' : parseFloat(e.target.value) })}/>
                             <div className="mt-1 text-xs text-slate-400 flex justify-between">
                                 <span>Comm: {s1Comm.toFixed(2)}</span>
                             </div>
@@ -561,8 +583,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                             <button type="submit" className="px-6 py-2 bg-orange-500 text-white rounded-lg font-bold shadow-lg shadow-orange-200 hover:bg-orange-600 transition-all text-xs">CONFIRM SPLIT</button>
                         </div>
                     </>
-                  );
-              })()}
+                   );
+                })()}
             </form>
           </div>
         </div>

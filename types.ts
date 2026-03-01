@@ -42,6 +42,9 @@ export interface TransactionData {
   expiration: string;
   strike: number;
   exercise?: string; // New field for Options
+  type?: string;
+  category?: string;
+  class?: string;
 }
 
 export interface PnLData {
@@ -146,7 +149,10 @@ export const TRANSACTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Last MV': 'lastMv',
   'Option': 'option',
   'Expiration': 'expiration',
-  'Strike': 'strike'
+  'Strike': 'strike',
+  'Type': 'type',
+  'Category': 'category',
+  'Class': 'class'
 };
 
 export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
