@@ -150,8 +150,8 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
                 <HeaderCell label="PE" field="peTTM" />
                 <HeaderCell label="PB" field="pb" />
                 <HeaderCell label="Div" field="dividendYield" />
-                <HeaderCell label="ROE" field="roeTTM" />
-                <HeaderCell label="PS" field="psQuantile" />
+                <HeaderCell label="ROE TTM" field="roeTTM" />
+                <HeaderCell label="PS PCTL" field="psQuantile" />
                 <HeaderCell label="Type" field="type" />
                 <HeaderCell label="Cat" field="category" />
                 <HeaderCell label="Class" field="class" />

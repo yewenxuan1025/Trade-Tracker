@@ -814,8 +814,8 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                             <ResizableHeader label="PE TTM" field="pe" />
                             <ResizableHeader label="PB" field="pb" />
                             <ResizableHeader label="Div Yld" field="div" />
-                            <ResizableHeader label="ROE" field="roe" />
-                            <ResizableHeader label="PS" field="ps" />
+                            <ResizableHeader label="ROE TTM" field="roe" />
+                            <ResizableHeader label="PS PCTL" field="ps" />
                             <ResizableHeader label="Shares" field="shares" />
                             <ResizableHeader label="Holdings (USD)" field="holdingsUsd" />
                             <ResizableHeader label="Holdings %" field="holdingsPct" />
@@ -892,11 +892,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                         <span className="font-mono font-bold text-sm text-slate-700">{weightedAvgs.div.toFixed(2)}</span>
                     </div>
                     <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">ROE Avg</span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">ROE TTM Avg</span>
                         <span className="font-mono font-bold text-sm text-slate-700">{weightedAvgs.roe.toFixed(2)}</span>
                     </div>
                     <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">PS Avg</span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">PS PCTL Avg</span>
                         <span className="font-mono font-bold text-sm text-slate-700">{weightedAvgs.ps.toFixed(2)}</span>
                     </div>
                     <div className="flex flex-col">

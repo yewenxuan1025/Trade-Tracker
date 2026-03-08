@@ -399,7 +399,12 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     year: parseNumeric(row['Year']),
                     month: parseNumeric(row['Month']),
                     expiration: row['Expiration'] ? parseExcelDate(row['Expiration']) : undefined,
-                    strike: row['Strike'] ? parseNumeric(row['Strike']) : undefined
+                    strike: row['Strike'] ? parseNumeric(row['Strike']) : undefined,
+                    // Explicitly ignore target columns from Excel to force recalculation in app
+                    tgtProfitCost: undefined,
+                    tgtProfitSales: undefined,
+                    tgtLossCost: undefined,
+                    tgtLossSales: undefined
                 } as PnLData));
             };
 
@@ -472,7 +477,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                                 id: generateId(), tradeNumber: no, stock: buyRow.stock, name: buyRow.name, market: buyRow.market, account: buyRow.account, option: buyRow.option, quantity: qty,
                                 buyDate: buyRow.date, buyPrice: bPrice, buyComm: bComm, totalBuy, sellDate: sellRow.date, sellPrice: sPrice, sellComm: sComm, totalSell, realizedPnL, returnPercent,
                                 year: sellDate.getFullYear(), month: sellDate.getMonth() + 1, holdingDays: Math.ceil(diffTime / (1000 * 60 * 60 * 24)),
-                                strike: buyRow.strike, expiration: buyRow.expiration
+                                strike: buyRow.strike, expiration: buyRow.expiration,
+                                tgtProfitCost: undefined, tgtProfitSales: undefined, tgtLossCost: undefined, tgtLossSales: undefined
                             });
                         }
                     });

@@ -550,7 +550,14 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'pnl' && (
-              <PnLTable data={pnlData} onExport={() => exportPnLToExcel(pnlData, marketConstants)} onUpload={(f) => handleSingleUpload('pnl', f)} onEditRecord={handleEditPnL} onDeleteRecord={handleDeletePnL} />
+              <PnLTable 
+                data={pnlData} 
+                marketConstants={marketConstants}
+                onExport={() => exportPnLToExcel(pnlData, marketConstants)} 
+                onUpload={(f) => handleSingleUpload('pnl', f)} 
+                onEditRecord={handleEditPnL} 
+                onDeleteRecord={handleDeletePnL} 
+              />
             )}
             {activeTab === 'nav' && (
               <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} />

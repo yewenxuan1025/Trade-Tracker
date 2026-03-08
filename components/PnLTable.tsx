@@ -150,13 +150,15 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
 
       let res = filtered.map(record => {
         const metrics = { profitCost: 0, profitSales: 0, lossCost: 0, lossSales: 0 };
-        // Calculation for target columns
+        const rate = getRate(record.market || '');
+        
+        // Calculation for target columns (Converted to USD)
         if (record.returnPercent >= targetProfitPct) {
-            metrics.profitCost = Math.abs(record.totalBuy);
-            metrics.profitSales = record.totalSell;
+            metrics.profitCost = Math.abs(record.totalBuy) / rate;
+            metrics.profitSales = record.totalSell / rate;
         } else if (record.returnPercent <= -Math.abs(targetLossPct)) {
-            metrics.lossCost = Math.abs(record.totalBuy);
-            metrics.lossSales = record.totalSell;
+            metrics.lossCost = Math.abs(record.totalBuy) / rate;
+            metrics.lossSales = record.totalSell / rate;
         }
         
         return { ...record, tgtProfitCost: metrics.profitCost, tgtProfitSales: metrics.profitSales, tgtLossCost: metrics.lossCost, tgtLossSales: metrics.lossSales };
@@ -171,8 +173,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
     return res;
   };
 
-  const processedStocks = useMemo(() => processData(stockPnl, stockSortConfig, stockFilters), [stockPnl, stockSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, stockFilters]);
-  const processedOptions = useMemo(() => processData(optionPnl, optionSortConfig, optionFilters), [optionPnl, optionSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, optionFilters]);
+  const processedStocks = useMemo(() => processData(stockPnl, stockSortConfig, stockFilters), [stockPnl, stockSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, stockFilters, marketConstants]);
+  const processedOptions = useMemo(() => processData(optionPnl, optionSortConfig, optionFilters), [optionPnl, optionSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, optionFilters, marketConstants]);
 
   // Default to Last Page on Data Change
   useEffect(() => {
