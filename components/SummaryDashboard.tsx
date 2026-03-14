@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { PnLData, MarketConstants, TransactionData, LookupSheetData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
-import { TrendingUp, TrendingDown, Target, Activity, PieChart, DollarSign, Wallet, BarChart3, ZoomIn, ZoomOut, Briefcase, History, Table as TableIcon, Calculator, ArrowLeftRight, Filter, Calendar } from 'lucide-react';
+import { Target, Activity, PieChart, DollarSign, BarChart3, Table as TableIcon, Calculator, Filter, Calendar } from 'lucide-react';
 import { calculatePortfolioAnalysis } from '../services/excelService';
 import AnalysisTable from './AnalysisTable';
 
@@ -16,9 +16,6 @@ interface SummaryDashboardProps {
 }
 
 const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition }) => {
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
-  const [isLosersExpanded, setIsLosersExpanded] = useState(false);
 
   // Date Range State
   const [startDate, setStartDate] = useState('');
@@ -414,98 +411,6 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         : val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  const Group2Table = ({ title, data, displayCurrency }: { title: string, data: any[], displayCurrency: string }) => {
-    // Calculate Totals for Subtotal Row
-    const totalCost = data.reduce((acc, r) => acc + r.totalCost, 0);
-    const totalLastMv = data.reduce((acc, r) => acc + r.lastMv, 0);
-    const totalRealizedPnl = data.reduce((acc, r) => acc + r.realizedPnl, 0);
-    const totalPnl = data.reduce((acc, r) => acc + r.pnl, 0);
-    const totalMvPct = data.reduce((acc, r) => acc + r.mvPct, 0);
-    const totalPnlPct = totalCost !== 0 ? (totalPnl / totalCost) * 100 : 0;
-
-    return (
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6">
-        <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-blue-50/20">
-          <h3 className="font-black text-slate-800 flex items-center gap-2 text-xs uppercase tracking-tight">
-            <Briefcase size={14} className="text-blue-500" /> {title} (USD for Totals/P&L)
-          </h3>
-          <span className="text-[9px] font-black bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">{data.length} HOLDINGS</span>
-        </div>
-        <div className="overflow-x-scroll custom-scrollbar">
-          <table className="w-full text-left text-[11px] table-fixed border-collapse">
-            <thead className="bg-slate-100/80">
-              <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b align-bottom">
-                <th className="py-2 px-3 w-20 sticky left-0 top-0 bg-slate-100 z-20 border-r text-left">Stock</th>
-                <th className="py-2 px-3 w-40 text-left sticky top-0 bg-slate-100/80">Name</th>
-                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">Shares</th>
-                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Total Cost (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Avg Cost ({displayCurrency})</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Actual Cost ({displayCurrency})</th>
-                <th className="py-2 px-3 w-24 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Last Price ({displayCurrency})</th>
-                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Last MV (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Realized P&L (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">P&L (USD)</th>
-                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">P&L %</th>
-                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">MV %</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {data.map(row => (
-                <tr key={row.stock} className="hover:bg-slate-50 transition-colors group">
-                  <td className="py-1.5 px-3 font-black text-blue-600 sticky left-0 bg-white z-10 border-r group-hover:bg-slate-50">{row.stock}</td>
-                  <td className="py-1.5 px-3 text-left font-bold text-slate-500 text-[10px] whitespace-nowrap overflow-hidden text-ellipsis max-w-[160px]" title={row.name}>{row.name}</td>
-                  <td className="py-1.5 px-3 text-right font-mono whitespace-nowrap">{row.shares.toLocaleString()}</td>
-                  <td className="py-1.5 px-3 text-right font-mono text-slate-600 font-bold whitespace-nowrap">
-                      ${row.totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </td>
-                  <td className="py-1.5 px-3 text-right font-mono text-slate-600 font-bold whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.avgCost)}
-                  </td>
-                  <td className="py-1.5 px-3 text-right font-mono text-emerald-600 font-bold whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.actualCost)}
-                  </td>
-                  <td className="py-1.5 px-3 text-right font-mono font-black text-slate-900 whitespace-nowrap">
-                      {displayCurrency === 'USD' ? '$' : ''}{formatPrice(row.lastPrice)}
-                  </td>
-                  <td className="py-1.5 px-3 text-right font-mono font-black text-slate-800 whitespace-nowrap">
-                      ${row.lastMv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </td>
-                  <td className={`py-1.5 px-3 text-right font-black font-mono whitespace-nowrap ${row.realizedPnl >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                      {row.realizedPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </td>
-                  <td className={`py-1.5 px-3 text-right font-black font-mono whitespace-nowrap ${row.pnl >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                      {row.pnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                  </td>
-                  <td className={`py-1.5 px-3 text-right font-black font-mono whitespace-nowrap ${row.pnlPct >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                      {row.pnlPct.toFixed(2)}%
-                  </td>
-                  <td className="py-1.5 px-3 text-right font-mono text-slate-500 whitespace-nowrap">
-                      {row.mvPct.toFixed(2)}%
-                  </td>
-                </tr>
-              ))}
-              {/* SUBTOTAL ROW */}
-              <tr className="bg-slate-100/70 border-t-2 border-slate-200 font-bold">
-                  <td className="py-2 px-3 sticky left-0 bg-slate-100/70 z-10 border-r font-black text-slate-700 uppercase tracking-wider">Subtotal</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-800">${totalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
-                  <td className="py-2 px-3 text-right font-mono text-slate-800">${totalLastMv.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                  <td className={`py-2 px-3 text-right font-black font-mono ${totalRealizedPnl >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>{totalRealizedPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                  <td className={`py-2 px-3 text-right font-black font-mono ${totalPnl >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>{totalPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
-                  <td className={`py-2 px-3 text-right font-black font-mono ${totalPnlPct >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>{totalPnlPct.toFixed(2)}%</td>
-                  <td className="py-2 px-3 text-right font-black font-mono text-slate-700">{totalMvPct.toFixed(2)}%</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
-
   const ResizableHeader = ({ label, field }: { label: string, field: string }) => (
     <th 
         className={`py-2 px-3 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r relative select-none sticky top-0 bg-slate-50 ${['select', 'date', 'ticker'].includes(field) ? 'z-20' : 'z-10'}`}
@@ -530,8 +435,6 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     </th>
   );
 
-  const displayWinners = isWinnersExpanded ? metrics.allWinners : metrics.allWinners.slice(0, 5);
-  const displayLosers = isLosersExpanded ? metrics.allLosers : metrics.allLosers.slice(0, 5);
   const dateStr = marketConstants.date.replace(/-/g, '');
   const getPct = (val: number, total: number) => total > 0 ? ((val/total)*100).toFixed(1) : '0.0';
 
@@ -687,61 +590,6 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           <MetricCard title="Avg P&L" value={`$${metrics.avgPnl.toFixed(2)}`} icon={PieChart} colorClass="text-purple-600" />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
-           <MetricCard title="Total Win (Profit)" value={`$${metrics.totalWinUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} subValue={`${metrics.winCount} Trades`} icon={TrendingUp} colorClass="text-red-500" />
-           <MetricCard title="Average Profit" value={`$${metrics.avgWin.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} icon={BarChart3} colorClass="text-red-500" />
-           <MetricCard title="Median Profit" value={`$${metrics.medianWin.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} icon={Activity} colorClass="text-red-500" />
-           
-           <MetricCard title="Total Loss" value={`$${Math.abs(metrics.totalLossUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`} subValue={`${metrics.lossCount} Trades`} icon={TrendingDown} colorClass="text-emerald-500" />
-           <MetricCard title="Average Loss" value={`$${Math.abs(metrics.avgLoss).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} icon={BarChart3} colorClass="text-emerald-500" />
-           <MetricCard title="Median Loss" value={`$${Math.abs(metrics.medianLoss).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} icon={Activity} colorClass="text-emerald-500" />
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b flex items-center justify-between cursor-pointer hover:bg-slate-50" onClick={() => setIsWinnersExpanded(!isWinnersExpanded)}>
-              <h3 className="font-black text-slate-800 flex items-center gap-2 text-xs uppercase tracking-tight">
-                <TrendingUp className="text-red-500" size={16} /> Top Winners
-              </h3>
-              <div className="text-[10px] font-black text-blue-600">{isWinnersExpanded ? 'COLLAPSE' : `VIEW ALL (${metrics.allWinners.length})`}</div>
-            </div>
-            <div className={`overflow-y-auto ${isWinnersExpanded ? 'max-h-[500px]' : 'max-h-[250px]'} transition-all`}>
-              <table className="w-full text-left text-xs">
-                <tbody className="divide-y">
-                  {displayWinners.map((s, i) => (
-                    <tr key={s.stock} className="hover:bg-slate-50">
-                      <td className="px-5 py-3 text-slate-400">{i + 1}</td>
-                      <td className="px-5 py-3 font-black">{s.stock}</td>
-                      <td className="px-5 py-3 text-right font-black text-red-500">+${s.pnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b flex items-center justify-between cursor-pointer hover:bg-slate-50" onClick={() => setIsLosersExpanded(!isLosersExpanded)}>
-              <h3 className="font-black text-slate-800 flex items-center gap-2 text-xs uppercase tracking-tight">
-                <TrendingDown className="text-emerald-500" size={16} /> Top Losers
-              </h3>
-              <div className="text-[10px] font-black text-blue-600">{isLosersExpanded ? 'COLLAPSE' : `VIEW ALL (${metrics.allLosers.length})`}</div>
-            </div>
-            <div className={`overflow-y-auto ${isLosersExpanded ? 'max-h-[500px]' : 'max-h-[250px]'} transition-all`}>
-              <table className="w-full text-left text-xs">
-                <tbody className="divide-y">
-                  {displayLosers.map((s, i) => (
-                    <tr key={s.stock} className="hover:bg-slate-50">
-                      <td className="px-5 py-3 text-slate-400">{i + 1}</td>
-                      <td className="px-5 py-3 font-black">{s.stock}</td>
-                      <td className="px-5 py-3 text-right font-black text-emerald-500">-${Math.abs(s.pnl).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section className="mb-12">
@@ -912,17 +760,6 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         </div>
       </section>
 
-      <div className="relative">
-        <section className="mt-12">
-          <div className="mb-6">
-            <h2 className="text-xl font-black text-slate-800 uppercase">Current Holdings</h2>
-          </div>
-          <Group2Table title="HK Holdings" data={group2.hk} displayCurrency="HKD" />
-          <Group2Table title="CCS Holdings" data={group2.ccs} displayCurrency="USD" />
-          <Group2Table title="US Stocks" data={group2.us} displayCurrency="USD" />
-          <Group2Table title="AUS Holdings" data={group2.aus} displayCurrency="USD" />
-        </section>
-      </div>
     </div>
   );
 };
