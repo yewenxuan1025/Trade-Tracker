@@ -431,22 +431,22 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           </h3>
           <span className="text-[9px] font-black bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">{data.length} HOLDINGS</span>
         </div>
-        <div className="overflow-x-auto custom-scrollbar">
+        <div className="overflow-x-scroll custom-scrollbar">
           <table className="w-full text-left text-[11px] table-fixed border-collapse">
-            <thead className="bg-slate-100/80 sticky top-0 z-10">
+            <thead className="bg-slate-100/80">
               <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b align-bottom">
-                <th className="py-2 px-3 w-20 sticky left-0 bg-slate-100 z-20 border-r text-left">Stock</th>
-                <th className="py-2 px-3 w-40 text-left">Name</th>
-                <th className="py-2 px-3 w-20 text-right">Shares</th>
-                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight">Total Cost (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight">Avg Cost ({displayCurrency})</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight">Actual Cost ({displayCurrency})</th>
-                <th className="py-2 px-3 w-24 text-right whitespace-normal leading-tight">Last Price ({displayCurrency})</th>
-                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight">Last MV (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight">Realized P&L (USD)</th>
-                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight">P&L (USD)</th>
-                <th className="py-2 px-3 w-20 text-right">P&L %</th>
-                <th className="py-2 px-3 w-20 text-right">MV %</th>
+                <th className="py-2 px-3 w-20 sticky left-0 top-0 bg-slate-100 z-20 border-r text-left">Stock</th>
+                <th className="py-2 px-3 w-40 text-left sticky top-0 bg-slate-100/80">Name</th>
+                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">Shares</th>
+                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Total Cost (USD)</th>
+                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Avg Cost ({displayCurrency})</th>
+                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Actual Cost ({displayCurrency})</th>
+                <th className="py-2 px-3 w-24 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Last Price ({displayCurrency})</th>
+                <th className="py-2 px-3 w-32 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Last MV (USD)</th>
+                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">Realized P&L (USD)</th>
+                <th className="py-2 px-3 w-28 text-right whitespace-normal leading-tight sticky top-0 bg-slate-100/80">P&L (USD)</th>
+                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">P&L %</th>
+                <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">MV %</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -508,7 +508,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
 
   const ResizableHeader = ({ label, field }: { label: string, field: string }) => (
     <th 
-        className={`py-2 px-3 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r relative select-none ${['select', 'date', 'ticker'].includes(field) ? 'sticky z-20 bg-slate-50' : ''}`} 
+        className={`py-2 px-3 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r relative select-none sticky top-0 bg-slate-50 ${['select', 'date', 'ticker'].includes(field) ? 'z-20' : 'z-10'}`}
         style={{ 
             width: colWidths[field], 
             minWidth: colWidths[field],
@@ -801,9 +801,9 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto custom-scrollbar max-h-[500px]">
+            <div className="overflow-x-scroll custom-scrollbar max-h-[500px]">
                 <table className="w-full text-left text-[11px] whitespace-nowrap table-fixed border-collapse">
-                    <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                    <thead className="bg-slate-50 shadow-sm">
                         <tr className="border-b">
                             <ResizableHeader label="select" field="select" />
                             <ResizableHeader label="Date" field="date" />

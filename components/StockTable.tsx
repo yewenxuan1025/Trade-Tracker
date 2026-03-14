@@ -142,9 +142,9 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
           </div>
       </div>
 
-      <div className="overflow-auto custom-scrollbar flex-1 bg-white">
+      <div className="overflow-scroll custom-scrollbar flex-1 bg-white">
         <table className="w-full text-left border-collapse table-fixed">
-          <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+          <thead className="bg-slate-50 shadow-sm">
             <tr>
                 <th className="px-3 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIndices.size === processedStocks.length && processedStocks.length > 0} onChange={(e) => setSelectedIndices(e.target.checked ? new Set(processedStocks.map(s => s.originalIndex)) : new Set())}/></th>
                 <HeaderCell label="Ticker" field="ticker" stickyLeft />
@@ -167,8 +167,8 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
           </thead>
           <tbody className="divide-y divide-slate-100">
             {processedStocks.map((stock) => (
-                <tr key={`${stock.ticker}-${stock.originalIndex}`} className={`hover:bg-blue-50/30 group transition-colors ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50/20' : ''}`}>
-                  <td className="px-3 py-2 sticky left-0 bg-white z-10 border-r border-slate-100 group-hover:bg-blue-50/50"><input type="checkbox" checked={selectedIndices.has(stock.originalIndex)} onChange={() => { const n = new Set(selectedIndices); if(n.has(stock.originalIndex)) n.delete(stock.originalIndex); else n.add(stock.originalIndex); setSelectedIndices(n); }}/></td>
+                <tr key={`${stock.ticker}-${stock.originalIndex}`} className={`group transition-colors ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`}>
+                  <td className={`px-3 py-2 sticky left-0 z-10 border-r border-slate-100 ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}><input type="checkbox" checked={selectedIndices.has(stock.originalIndex)} onChange={() => { const n = new Set(selectedIndices); if(n.has(stock.originalIndex)) n.delete(stock.originalIndex); else n.add(stock.originalIndex); setSelectedIndices(n); }}/></td>
                   <td className="px-4 py-2 font-bold text-blue-600 text-xs">{stock.ticker}</td>
                   <td className="px-4 py-2 truncate text-slate-600 text-xs">{stock.companyName}</td>
                   <td className="px-4 py-2 text-center text-xs">{stock.isChinese}</td>

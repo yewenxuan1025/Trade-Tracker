@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent, Upload } from 'lucide-react';
+import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent, Upload, Calendar } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 import { NavData } from '../types';
 import { generateId } from '../services/excelService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
@@ -15,10 +16,28 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newRecord, setNewRecord] = useState<Partial<NavData>>({ date: new Date().toISOString().split('T')[0], aum: 0 });
   const [editRecord, setEditRecord] = useState<Partial<NavData>>({});
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState(new Date().toISOString().split('T')[0]);
 
   const sortedData = useMemo(() => {
     return [...data].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [data]);
+
+  // Set periodStart to earliest date when data loads
+  useMemo(() => {
+    if (sortedData.length > 0 && !periodStart) {
+      setPeriodStart(sortedData[0].date);
+    }
+  }, [sortedData]);
+
+  const periodReturn = useMemo(() => {
+    if (!periodStart || sortedData.length === 0) return null;
+    const startRecord = sortedData.find(d => d.date >= periodStart);
+    const endRecord = [...sortedData].reverse().find(d => d.date <= periodEnd);
+    if (!startRecord || !endRecord || startRecord.nav2 === 0) return null;
+    return (endRecord.nav2 - startRecord.nav2) / startRecord.nav2;
+  }, [sortedData, periodStart, periodEnd]);
 
   const handleAdd = () => {
     if (!newRecord.date || newRecord.aum === undefined) return;
@@ -73,9 +92,13 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Are you sure you want to delete this record?')) {
+    setConfirmState({
+      message: 'Delete this NAV record?',
+      onConfirm: () => {
         onUpdate(data.filter(item => item.id !== id));
-    }
+        setConfirmState(null);
+      }
+    });
   };
 
   const startEdit = (item: NavData) => {
@@ -124,7 +147,7 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-4">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
                 <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">Latest Stats</h3>
                 <div className="space-y-4">
@@ -143,6 +166,26 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                         <p className="text-2xl font-bold text-slate-800">{(sortedData[sortedData.length - 1]?.nav2 || 0).toFixed(4)}</p>
                     </div>
                 </div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2"><Calendar size={14} />Period Return</h3>
+                <div className="space-y-2 mb-3">
+                    <div>
+                        <p className="text-xs text-slate-400 mb-1">From</p>
+                        <input type="date" value={periodStart} onChange={e => setPeriodStart(e.target.value)} className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-400 mb-1">To</p>
+                        <input type="date" value={periodEnd} onChange={e => setPeriodEnd(e.target.value)} className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                </div>
+                {periodReturn !== null ? (
+                    <p className={`text-2xl font-bold ${periodReturn >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                        {(periodReturn * 100).toFixed(2)}%
+                    </p>
+                ) : (
+                    <p className="text-slate-400 text-sm">No data for selected period</p>
+                )}
             </div>
         </div>
       </div>
@@ -185,9 +228,9 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
             </div>
         )}
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-scroll">
           <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+            <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200 sticky top-0 z-10">
               <tr>
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4">AUM</th>
@@ -257,6 +300,7 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
           </table>
         </div>
       </div>
+      {confirmState && <ConfirmDialog message={confirmState.message} onConfirm={confirmState.onConfirm} onCancel={() => setConfirmState(null)} />}
     </div>
   );
 };
