@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { StockData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS, MARKET_OPTIONS } from '../types';
 import { Search, AlertCircle, Download, Upload, ArrowUpDown, ArrowUp, ArrowDown, Plus, Pencil, Trash2, X, Save } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface StockTableProps {
   stocks: StockData[];
@@ -16,6 +17,7 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof StockData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingStock, setEditingStock] = useState<StockData | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null); // Original index in the main array
@@ -100,10 +102,14 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
 
   const handleDelete = () => {
       if (selectedIndices.size === 0) return;
-      if (window.confirm(`Delete ${selectedIndices.size} records?`)) {
-          onStockDelete(Array.from(selectedIndices));
-          setSelectedIndices(new Set());
-      }
+      setConfirmState({
+          message: `Delete ${selectedIndices.size} selected record${selectedIndices.size > 1 ? 's' : ''}?`,
+          onConfirm: () => {
+              onStockDelete(Array.from(selectedIndices));
+              setSelectedIndices(new Set());
+              setConfirmState(null);
+          }
+      });
   };
 
   return (
@@ -248,6 +254,13 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );

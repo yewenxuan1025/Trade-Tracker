@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PnLData, MarketConstants } from '../types';
 import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface PnLTableProps {
   data: PnLData[];
@@ -68,6 +69,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
   }, [data]);
 
   // Separate State for Stock and Option tables
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [stockSortConfig, setStockSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
   const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
@@ -269,7 +271,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
                   {selectedIds.size > 0 && (
                       <div className="flex items-center gap-2">
                          {selectedIds.size === 1 && <button onClick={() => { const rec = data.find(p => p.id === Array.from(selectedIds)[0]); if(rec) { setEditingRecord(rec); setIsEditModalOpen(true); } }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"><Pencil size={14}/></button>}
-                         <button onClick={() => { if(window.confirm(`Delete ${selectedIds.size} records?`)) { onDeleteRecord(Array.from(selectedIds)); setSelectedIds(new Set()); }}} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200"><Trash2 size={14}/></button>
+                         <button onClick={() => { setConfirmState({ message: `Delete ${selectedIds.size} record${selectedIds.size > 1 ? 's' : ''}?`, onConfirm: () => { onDeleteRecord(Array.from(selectedIds)); setSelectedIds(new Set()); setConfirmState(null); } }); }} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200"><Trash2 size={14}/></button>
                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{selectedIds.size} Selected</span>
                       </div>
                   )}
@@ -505,6 +507,13 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );

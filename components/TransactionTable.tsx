@@ -3,6 +3,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { TransactionData, LookupSheetData, EXERCISE_OPTIONS } from '../types';
 import { generateId } from '../services/excelService';
 import { Search, Download, X, Plus, Pencil, Upload, ArrowUp, ArrowDown, Trash2, Copy, Scissors } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface TransactionTableProps {
   transactions: TransactionData[];
@@ -71,6 +72,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
     stock: '', name: '', market: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No'
   });
 
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitForm, setSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
 
@@ -301,15 +303,19 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const handleBulkDelete = (isOption = false) => {
     const ids = isOption ? Array.from(selectedOptionIds) : Array.from(selectedIds);
     if (ids.length === 0) return;
-    if (window.confirm(`Permanently delete ${ids.length} selected records?`)) {
-        if (isOption && onDeleteOptionTransaction) {
-            onDeleteOptionTransaction(ids);
-            setSelectedOptionIds(new Set());
-        } else if (!isOption) {
-            onDeleteTransaction(ids);
-            setSelectedIds(new Set());
+    setConfirmState({
+        message: `Permanently delete ${ids.length} selected record${ids.length > 1 ? 's' : ''}?`,
+        onConfirm: () => {
+            if (isOption && onDeleteOptionTransaction) {
+                onDeleteOptionTransaction(ids);
+                setSelectedOptionIds(new Set());
+            } else if (!isOption) {
+                onDeleteTransaction(ids);
+                setSelectedIds(new Set());
+            }
+            setConfirmState(null);
         }
-    }
+    });
   };
 
   return (
@@ -588,6 +594,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );
