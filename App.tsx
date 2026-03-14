@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { LayoutDashboard, Table, LineChart, PieChart, Settings, LogOut, ArrowLeft, Layers, TrendingUp, BarChart3, Archive, Upload, X, Download } from 'lucide-react';
+import { useToast } from './components/Toast';
 import FileUpload from './components/FileUpload';
 import SummaryCards from './components/SummaryCards';
 import StockTable from './components/StockTable';
@@ -21,6 +22,7 @@ const NAV_DATA_KEY = 'trade_tracker_nav_data';
 const CASH_POSITION_KEY = 'trade_tracker_cash_pos';
 
 const App: React.FC = () => {
+  const { showToast } = useToast();
   const [lookupData, setLookupData] = useState<LookupSheetData | null>(() => {
     const saved = localStorage.getItem(LOOKUP_DATA_KEY);
     if (saved) { try { const p = JSON.parse(saved); return { ...p, lastUpdated: new Date(p.lastUpdated) }; } catch(e){} }
@@ -103,8 +105,11 @@ const App: React.FC = () => {
       setPnlData(result.pnl);
       setNavData(result.navData);
       setIsUploading(false);
+      if (result.warnings.length > 0) {
+        result.warnings.slice(0, 5).forEach(w => showToast(w, 'info'));
+      }
     } catch (error) {
-      alert("Error parsing file: " + (error as Error).message);
+      showToast("Error parsing file: " + (error as Error).message, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -193,9 +198,12 @@ const App: React.FC = () => {
       });
 
       setIsUploading(false);
-      alert(`Successfully appended ${result.transactions.length} transactions and ${result.optionTransactions.length} option transactions.`);
+      showToast(`Appended ${result.transactions.length} transactions and ${result.optionTransactions.length} option transactions.`, 'success');
+      if (result.warnings.length > 0) {
+        result.warnings.slice(0, 5).forEach(w => showToast(w, 'info'));
+      }
     } catch (error) {
-      alert("Error parsing file for append: " + (error as Error).message);
+      showToast("Error parsing file for append: " + (error as Error).message, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -208,13 +216,13 @@ const App: React.FC = () => {
       if (!t1 || !t2) return;
 
       if (t1.stock.toUpperCase() !== t2.stock.toUpperCase()) {
-          alert(`Stock mismatch: ${t1.stock} vs ${t2.stock}`); return;
+          showToast(`Stock mismatch: ${t1.stock} vs ${t2.stock}`, 'error'); return;
       }
       if (t1.action === t2.action) {
-          alert(`Action mismatch: Both are ${t1.action}. Need one Buy and one Sell.`); return;
+          showToast(`Action mismatch: Both are ${t1.action}. Need one Buy and one Sell.`, 'error'); return;
       }
       if (Math.abs(t1.shares) !== Math.abs(t2.shares)) {
-          alert(`Quantity mismatch: ${t1.shares} vs ${t2.shares}`); return;
+          showToast(`Quantity mismatch: ${t1.shares} vs ${t2.shares}`, 'error'); return;
       }
 
       const buy = t1.action.toLowerCase().includes('buy') ? t1 : t2;
@@ -245,7 +253,7 @@ const App: React.FC = () => {
 
       setPnlData(prev => [...prev, newPnl]);
       setTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
-      alert("Successfully created Stock P&L record!");
+      showToast("Stock P&L record created successfully!", 'success');
   }, [transactions, pnlData]);
 
   const handleCreateOptionPnL = useCallback((ids: string[]) => {
@@ -256,16 +264,16 @@ const App: React.FC = () => {
 
     // Validate Pairing Logic for Options
     if (t1.stock.toUpperCase() !== t2.stock.toUpperCase()) {
-        alert(`Stock mismatch: ${t1.stock} vs ${t2.stock}`); return;
+        showToast(`Stock mismatch: ${t1.stock} vs ${t2.stock}`, 'error'); return;
     }
     if (t1.option !== t2.option) {
-        alert(`Option Type mismatch: ${t1.option} vs ${t2.option}`); return;
+        showToast(`Option Type mismatch: ${t1.option} vs ${t2.option}`, 'error'); return;
     }
     if (t1.strike !== t2.strike) {
-        alert(`Strike Price mismatch: ${t1.strike} vs ${t2.strike}`); return;
+        showToast(`Strike Price mismatch: ${t1.strike} vs ${t2.strike}`, 'error'); return;
     }
     if (t1.expiration !== t2.expiration) {
-        alert(`Expiration Date mismatch: ${t1.expiration} vs ${t2.expiration}`); return;
+        showToast(`Expiration Date mismatch: ${t1.expiration} vs ${t2.expiration}`, 'error'); return;
     }
     
     // Determine Buy/Sell for P&L logic. 
@@ -285,11 +293,11 @@ const App: React.FC = () => {
     const sell = t1.action.toLowerCase().includes('sell') ? t1 : t2;
 
     if (buy.id === sell.id) { // Both are Buy or Both are Sell
-       alert("Action mismatch: Need one Buy and one Sell transaction to pair."); return;
+       showToast("Action mismatch: Need one Buy and one Sell transaction to pair.", 'error'); return;
     }
 
     if (Math.abs(buy.shares) !== Math.abs(sell.shares)) {
-        alert(`Quantity/Contract mismatch: ${buy.shares} vs ${sell.shares}`); return;
+        showToast(`Quantity/Contract mismatch: ${buy.shares} vs ${sell.shares}`, 'error'); return;
     }
 
     const qty = Math.abs(buy.shares);
@@ -333,7 +341,7 @@ const App: React.FC = () => {
 
     setPnlData(prev => [...prev, newPnl]);
     setOptionTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
-    alert("Successfully created Option P&L record!");
+    showToast("Option P&L record created successfully!", 'success');
   }, [optionTransactions, pnlData]);
 
   // --- STOCK TRANSACTION HANDLERS ---
@@ -431,7 +439,7 @@ const App: React.FC = () => {
         else if (section === 'option_transaction') setOptionTransactions(result.optionTransactions);
         else if (section === 'pnl') setPnlData(result.pnl);
         else if (section === 'nav') setNavData(result.navData);
-    } catch (e) { alert("Error uploading " + section + ": " + (e as Error).message); }
+    } catch (e) { showToast("Error uploading " + section + ": " + (e as Error).message, 'error'); }
   };
 
   const handleGlobalExport = () => {
@@ -553,7 +561,7 @@ const App: React.FC = () => {
               <PnLTable 
                 data={pnlData} 
                 marketConstants={marketConstants}
-                onExport={() => exportPnLToExcel(pnlData, marketConstants)} 
+                onExport={(filteredData) => exportPnLToExcel(filteredData, marketConstants)}
                 onUpload={(f) => handleSingleUpload('pnl', f)} 
                 onEditRecord={handleEditPnL} 
                 onDeleteRecord={handleDeletePnL} 

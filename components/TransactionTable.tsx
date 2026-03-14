@@ -3,6 +3,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { TransactionData, LookupSheetData, EXERCISE_OPTIONS } from '../types';
 import { generateId } from '../services/excelService';
 import { Search, Download, X, Plus, Pencil, Upload, ArrowUp, ArrowDown, Trash2, Copy, Scissors } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
+import { useToast } from './Toast';
 
 interface TransactionTableProps {
   transactions: TransactionData[];
@@ -71,6 +73,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
     stock: '', name: '', market: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No'
   });
 
+  const { showToast } = useToast();
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitForm, setSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
 
@@ -93,13 +97,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
       const s2Shares = original.shares - s1Shares;
 
       if (s1Shares === 0 || s2Shares === 0) {
-          alert("Split parts cannot be zero");
+          showToast("Split parts cannot be zero", 'error');
           return;
       }
-      
+
       // Allow negative shares (for short positions), but ensure we don't divide by zero
       if (original.shares === 0) {
-          alert("Original shares cannot be zero");
+          showToast("Original shares cannot be zero", 'error');
           return;
       }
 
@@ -301,15 +305,19 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const handleBulkDelete = (isOption = false) => {
     const ids = isOption ? Array.from(selectedOptionIds) : Array.from(selectedIds);
     if (ids.length === 0) return;
-    if (window.confirm(`Permanently delete ${ids.length} selected records?`)) {
-        if (isOption && onDeleteOptionTransaction) {
-            onDeleteOptionTransaction(ids);
-            setSelectedOptionIds(new Set());
-        } else if (!isOption) {
-            onDeleteTransaction(ids);
-            setSelectedIds(new Set());
+    setConfirmState({
+        message: `Permanently delete ${ids.length} selected record${ids.length > 1 ? 's' : ''}?`,
+        onConfirm: () => {
+            if (isOption && onDeleteOptionTransaction) {
+                onDeleteOptionTransaction(ids);
+                setSelectedOptionIds(new Set());
+            } else if (!isOption) {
+                onDeleteTransaction(ids);
+                setSelectedIds(new Set());
+            }
+            setConfirmState(null);
         }
-    }
+    });
   };
 
   return (
@@ -348,9 +356,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </div>
         </div>
 
-        <div className="overflow-auto custom-scrollbar flex-1 bg-white">
+        <div className="overflow-scroll custom-scrollbar flex-1 bg-white">
           <table className="w-full text-left border-collapse table-fixed">
-            <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+            <thead className="bg-slate-50 shadow-sm">
               <tr>
                 <th className="px-4 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(filtered.map(t => t.id)) : new Set())}/></th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase sticky left-10 top-0 bg-slate-50 z-40 border-b border-slate-200 w-12 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">#</th>
@@ -370,10 +378,10 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((t, i) => (
-                  <tr key={t.id} className={`hover:bg-blue-50/20 group cursor-pointer transition-colors ${selectedIds.has(t.id) ? 'bg-blue-50/40' : ''}`} onClick={() => { const n = new Set(selectedIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedIds(n); }}>
-                    <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r group-hover:bg-blue-50/20" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(t.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedIds(n); }}/></td>
-                    <td className="px-4 py-2 text-[10px] text-slate-400 sticky left-10 bg-white z-10 border-r group-hover:bg-blue-50/20">{i + 1}</td>
-                    <td className="px-4 py-2 font-bold text-blue-600 truncate sticky left-[88px] bg-white z-10 border-r group-hover:bg-blue-50/20">{t.stock}</td>
+                  <tr key={t.id} className={`group cursor-pointer transition-colors ${selectedIds.has(t.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedIds(n); }}>
+                    <td className={`px-4 py-2 sticky left-0 z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(t.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedIds(n); }}/></td>
+                    <td className={`px-4 py-2 text-[10px] text-slate-400 sticky left-10 z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{i + 1}</td>
+                    <td className={`px-4 py-2 font-bold text-blue-600 truncate sticky left-[88px] z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{t.stock}</td>
                     <td className="px-4 py-2 text-slate-600 truncate text-xs">{t.name}</td>
                     <td className="px-4 py-2 text-[10px] text-slate-400">{t.market}</td>
                     <td className={`px-4 py-2 text-[10px] font-bold uppercase ${t.action.toLowerCase().includes('buy') ? 'text-red-500' : 'text-emerald-500'}`}>{t.action}</td>
@@ -422,9 +430,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </div>
         </div>
 
-        <div className="overflow-auto custom-scrollbar flex-1 bg-white">
+        <div className="overflow-scroll custom-scrollbar flex-1 bg-white">
           <table className="w-full text-left border-collapse table-fixed">
-            <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+            <thead className="bg-slate-50 shadow-sm">
               <tr>
                 <th className="px-4 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedOptionIds.size === filteredOptions.length && filteredOptions.length > 0} onChange={(e) => setSelectedOptionIds(e.target.checked ? new Set(filteredOptions.map(t => t.id)) : new Set())}/></th>
                 <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase sticky left-10 top-0 bg-slate-50 z-40 border-b border-slate-200 w-12 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">#</th>
@@ -445,10 +453,10 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredOptions.map((t, i) => (
-                  <tr key={t.id} className={`hover:bg-purple-50/20 group cursor-pointer transition-colors ${selectedOptionIds.has(t.id) ? 'bg-purple-50/40' : ''}`} onClick={() => { const n = new Set(selectedOptionIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedOptionIds(n); }}>
-                    <td className="px-4 py-2 sticky left-0 bg-white z-10 border-r group-hover:bg-purple-50/20" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedOptionIds.has(t.id)} onChange={() => { const n = new Set(selectedOptionIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedOptionIds(n); }}/></td>
-                    <td className="px-4 py-2 text-[10px] text-slate-400 sticky left-10 bg-white z-10 border-r group-hover:bg-purple-50/20">{i + 1}</td>
-                    <td className="px-4 py-2 font-bold text-purple-600 truncate sticky left-[88px] bg-white z-10 border-r group-hover:bg-purple-50/20">{t.stock}</td>
+                  <tr key={t.id} className={`group cursor-pointer transition-colors ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedOptionIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedOptionIds(n); }}>
+                    <td className={`px-4 py-2 sticky left-0 z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedOptionIds.has(t.id)} onChange={() => { const n = new Set(selectedOptionIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedOptionIds(n); }}/></td>
+                    <td className={`px-4 py-2 text-[10px] text-slate-400 sticky left-10 z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{i + 1}</td>
+                    <td className={`px-4 py-2 font-bold text-purple-600 truncate sticky left-[88px] z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{t.stock}</td>
                     <td className="px-4 py-2 text-slate-600 truncate text-xs">{t.name}</td>
                     <td className="px-4 py-2 text-xs font-bold text-slate-700">{t.option}</td>
                     <td className="px-4 py-2 text-[10px] text-slate-500">{t.expiration}</td>
@@ -588,6 +596,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );

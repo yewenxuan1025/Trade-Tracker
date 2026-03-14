@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { StockData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS, MARKET_OPTIONS } from '../types';
 import { Search, AlertCircle, Download, Upload, ArrowUpDown, ArrowUp, ArrowDown, Plus, Pencil, Trash2, X, Save } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface StockTableProps {
   stocks: StockData[];
@@ -16,6 +17,7 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof StockData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingStock, setEditingStock] = useState<StockData | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null); // Original index in the main array
@@ -100,10 +102,14 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
 
   const handleDelete = () => {
       if (selectedIndices.size === 0) return;
-      if (window.confirm(`Delete ${selectedIndices.size} records?`)) {
-          onStockDelete(Array.from(selectedIndices));
-          setSelectedIndices(new Set());
-      }
+      setConfirmState({
+          message: `Delete ${selectedIndices.size} selected record${selectedIndices.size > 1 ? 's' : ''}?`,
+          onConfirm: () => {
+              onStockDelete(Array.from(selectedIndices));
+              setSelectedIndices(new Set());
+              setConfirmState(null);
+          }
+      });
   };
 
   return (
@@ -136,9 +142,9 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
           </div>
       </div>
 
-      <div className="overflow-auto custom-scrollbar flex-1 bg-white">
+      <div className="overflow-scroll custom-scrollbar flex-1 bg-white">
         <table className="w-full text-left border-collapse table-fixed">
-          <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+          <thead className="bg-slate-50 shadow-sm">
             <tr>
                 <th className="px-3 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIndices.size === processedStocks.length && processedStocks.length > 0} onChange={(e) => setSelectedIndices(e.target.checked ? new Set(processedStocks.map(s => s.originalIndex)) : new Set())}/></th>
                 <HeaderCell label="Ticker" field="ticker" stickyLeft />
@@ -161,8 +167,8 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
           </thead>
           <tbody className="divide-y divide-slate-100">
             {processedStocks.map((stock) => (
-                <tr key={`${stock.ticker}-${stock.originalIndex}`} className={`hover:bg-blue-50/30 group transition-colors ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50/20' : ''}`}>
-                  <td className="px-3 py-2 sticky left-0 bg-white z-10 border-r border-slate-100 group-hover:bg-blue-50/50"><input type="checkbox" checked={selectedIndices.has(stock.originalIndex)} onChange={() => { const n = new Set(selectedIndices); if(n.has(stock.originalIndex)) n.delete(stock.originalIndex); else n.add(stock.originalIndex); setSelectedIndices(n); }}/></td>
+                <tr key={`${stock.ticker}-${stock.originalIndex}`} className={`group transition-colors ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`}>
+                  <td className={`px-3 py-2 sticky left-0 z-10 border-r border-slate-100 ${selectedIndices.has(stock.originalIndex) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}><input type="checkbox" checked={selectedIndices.has(stock.originalIndex)} onChange={() => { const n = new Set(selectedIndices); if(n.has(stock.originalIndex)) n.delete(stock.originalIndex); else n.add(stock.originalIndex); setSelectedIndices(n); }}/></td>
                   <td className="px-4 py-2 font-bold text-blue-600 text-xs">{stock.ticker}</td>
                   <td className="px-4 py-2 truncate text-slate-600 text-xs">{stock.companyName}</td>
                   <td className="px-4 py-2 text-center text-xs">{stock.isChinese}</td>
@@ -248,6 +254,13 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );

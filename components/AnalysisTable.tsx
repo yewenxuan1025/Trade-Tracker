@@ -16,22 +16,22 @@ const AnalysisTable: React.FC<AnalysisTableProps> = ({ title, data, currency }) 
       </h3>
       <span className="text-[9px] font-black bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{data.length} STOCKS</span>
     </div>
-    <div className="overflow-x-auto custom-scrollbar">
+    <div className="overflow-x-scroll custom-scrollbar">
       <table className="w-full text-left text-[11px] whitespace-nowrap table-fixed border-collapse">
-        <thead className="bg-slate-100/80 sticky top-0 z-10">
+        <thead className="bg-slate-100/80">
           <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b">
-            <th className="py-2 px-3 w-24 sticky left-0 bg-slate-100 z-20 border-r">Stock</th>
-            <th className="py-2 px-3 w-32">Name</th>
-            <th className="py-2 px-3 w-16 text-center">Pos</th>
-            <th className="py-2 px-3 w-28 text-right">Current Cost (USD)</th>
-            <th className="py-2 px-3 w-28 text-right">Avg Cost</th>
-            <th className="py-2 px-3 w-24 text-right">Act Prc</th>
-            <th className="py-2 px-3 w-24 text-right">Last Prc</th>
-            <th className="py-2 px-3 w-24 text-right">Real P&L (USD)</th>
-            <th className="py-2 px-3 w-28 text-right">Unrealized (USD)</th>
-            <th className="py-2 px-3 w-20 text-right">Rtn%</th>
-            <th className="py-2 px-3 w-28 text-right">Last MV (USD)</th>
-            <th className="py-2 px-3 w-20 text-right">MV%</th>
+            <th className="py-2 px-3 w-24 sticky left-0 top-0 bg-slate-100 z-20 border-r">Stock</th>
+            <th className="py-2 px-3 w-32 sticky top-0 bg-slate-100/80">Name</th>
+            <th className="py-2 px-3 w-16 text-center sticky top-0 bg-slate-100/80">Pos</th>
+            <th className="py-2 px-3 w-28 text-right sticky top-0 bg-slate-100/80">Current Cost (USD)</th>
+            <th className="py-2 px-3 w-28 text-right sticky top-0 bg-slate-100/80">Avg Cost</th>
+            <th className="py-2 px-3 w-24 text-right sticky top-0 bg-slate-100/80">Act Prc</th>
+            <th className="py-2 px-3 w-24 text-right sticky top-0 bg-slate-100/80">Last Prc</th>
+            <th className="py-2 px-3 w-24 text-right sticky top-0 bg-slate-100/80">Real P&L (USD)</th>
+            <th className="py-2 px-3 w-28 text-right sticky top-0 bg-slate-100/80">Unrealized (USD)</th>
+            <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">Rtn%</th>
+            <th className="py-2 px-3 w-28 text-right sticky top-0 bg-slate-100/80">Last MV (USD)</th>
+            <th className="py-2 px-3 w-20 text-right sticky top-0 bg-slate-100/80">MV%</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">

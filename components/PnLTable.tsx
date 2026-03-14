@@ -2,12 +2,13 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PnLData, MarketConstants } from '../types';
 import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface PnLTableProps {
   data: PnLData[];
   marketConstants?: MarketConstants;
   onUpload: (file: File) => void;
-  onExport: () => void;
+  onExport: (filteredData: PnLData[]) => void;
   onEditRecord: (id: string, updated: Partial<PnLData>) => void;
   onDeleteRecord: (id: string | string[]) => void;
 }
@@ -68,6 +69,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
   }, [data]);
 
   // Separate State for Stock and Option tables
+  const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [stockSortConfig, setStockSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
   const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
@@ -269,7 +271,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
                   {selectedIds.size > 0 && (
                       <div className="flex items-center gap-2">
                          {selectedIds.size === 1 && <button onClick={() => { const rec = data.find(p => p.id === Array.from(selectedIds)[0]); if(rec) { setEditingRecord(rec); setIsEditModalOpen(true); } }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"><Pencil size={14}/></button>}
-                         <button onClick={() => { if(window.confirm(`Delete ${selectedIds.size} records?`)) { onDeleteRecord(Array.from(selectedIds)); setSelectedIds(new Set()); }}} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200"><Trash2 size={14}/></button>
+                         <button onClick={() => { setConfirmState({ message: `Delete ${selectedIds.size} record${selectedIds.size > 1 ? 's' : ''}?`, onConfirm: () => { onDeleteRecord(Array.from(selectedIds)); setSelectedIds(new Set()); setConfirmState(null); } }); }} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200"><Trash2 size={14}/></button>
                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{selectedIds.size} Selected</span>
                       </div>
                   )}
@@ -326,9 +328,9 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
               </div>
           )}
        </div>
-       <div className="overflow-auto custom-scrollbar flex-1 bg-white">
+       <div className="overflow-scroll custom-scrollbar flex-1 bg-white">
         <table className="w-full text-left border-collapse table-fixed">
-          <thead className="sticky top-0 z-30 bg-slate-50 shadow-sm">
+          <thead className="bg-slate-50 shadow-sm">
             <tr>
               <th className="px-3 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIds.size === tableData.length && tableData.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(tableData.map((p: any) => p.id)) : new Set())}/></th>
               <HeaderCell label="No." field="tradeNumber" sortConfig={sortConfig} setSortConfig={setSortConfig} stickyLeft leftOffset={40} />
@@ -358,10 +360,10 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
           </thead>
           <tbody className="divide-y divide-slate-100">
             {paginatedData.map((r) => (
-              <tr key={r.id} className={`hover:bg-slate-50/50 group cursor-pointer transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50/30' : ''}`} onClick={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}>
-                <td className="px-3 py-2 sticky left-0 bg-white z-10 border-r group-hover:bg-slate-50/50" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}/></td>
-                <td className="px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[40px] bg-white z-10 border-r group-hover:bg-slate-50/50">{r.tradeNumber}</td>
-                <td className="px-3 py-2 font-extrabold text-blue-600 sticky left-[90px] bg-white z-10 border-r group-hover:bg-slate-50/50 text-xs">{r.stock}</td>
+              <tr key={r.id} className={`group cursor-pointer transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}>
+                <td className={`px-3 py-2 sticky left-0 z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}/></td>
+                <td className={`px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[40px] z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.tradeNumber}</td>
+                <td className={`px-3 py-2 font-extrabold text-blue-600 sticky left-[90px] z-10 border-r text-xs ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.stock}</td>
                 {isOption && <td className="px-3 py-2 text-[10px] text-purple-600 font-bold">{r.option}</td>}
                 {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-600">{r.strike}</td>}
                 {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.expiration}</td>}
@@ -416,7 +418,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
                     <Upload size={14} />Upload
                     <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
                 </label>
-                <button onClick={onExport} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Download size={14} />Export</button>
+                <button onClick={() => onExport([...processedStocks, ...processedOptions])} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Download size={14} />Export</button>
             </div>
         </div>
         
@@ -505,6 +507,13 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
             </form>
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </div>
   );

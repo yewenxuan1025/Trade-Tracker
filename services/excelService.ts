@@ -149,6 +149,7 @@ export interface ParseResult {
   optionTransactions: TransactionData[];
   pnl: PnLData[];
   navData: NavData[];
+  warnings: string[];
 }
 
 /**
@@ -221,7 +222,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         const data = e.target?.result;
         if (!data) throw new Error("File is empty");
         const workbook = XLSX.read(data, { type: 'array' });
-        
+        const warnings: string[] = [];
+
         // --- PARSE LOOKUP SHEET ---
         const lookupSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'lookup');
         let stocks: StockData[] = [];
@@ -239,12 +241,12 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
             if (headerRowIndex !== -1) {
                 const headers = jsonData[headerRowIndex].map(h => String(h).trim());
                 const columnMap: Record<number, keyof StockData> = {};
+                const knownLookupHeaders = new Set(Object.keys(EXCEL_HEADER_MAP).map(k => k.toLowerCase()));
                 headers.forEach((h, index) => {
-                    for (const [excelHeader, key] of Object.entries(EXCEL_HEADER_MAP)) {
-                      if (h.toLowerCase() === excelHeader.toLowerCase()) {
-                          columnMap[index] = key;
-                          break;
-                      }
+                    const matched = Object.entries(EXCEL_HEADER_MAP).find(([k]) => h.toLowerCase() === k.toLowerCase());
+                    if (matched) { columnMap[index] = matched[1]; }
+                    else if (h && !knownLookupHeaders.has(h.toLowerCase())) {
+                        warnings.push(`Lookup sheet: unrecognized column "${h}"`);
                     }
                 });
                 for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
@@ -288,12 +290,9 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                 const headers = jsonData[headerRowIndex].map(h => String(h).trim());
                 const columnMap: Record<number, keyof TransactionData> = {};
                 headers.forEach((h, index) => {
-                    for (const [excelHeader, key] of Object.entries(TRANSACTION_HEADER_MAP)) {
-                        if (h.toLowerCase() === excelHeader.toLowerCase()) {
-                            columnMap[index] = key;
-                            break;
-                        }
-                    }
+                    const matched = Object.entries(TRANSACTION_HEADER_MAP).find(([k]) => h.toLowerCase() === k.toLowerCase());
+                    if (matched) { columnMap[index] = matched[1] as keyof TransactionData; }
+                    else if (h) { warnings.push(`Transaction sheet: unrecognized column "${h}"`); }
                 });
                 for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
                     const row = jsonData[i];
@@ -549,7 +548,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
             }
         }
         
-        resolve({ lookup: { stocks, lastUpdated: new Date() }, transactions, optionTransactions, pnl: pnlData, navData });
+        resolve({ lookup: { stocks, lastUpdated: new Date() }, transactions, optionTransactions, pnl: pnlData, navData, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);
