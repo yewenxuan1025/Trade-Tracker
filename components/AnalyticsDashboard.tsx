@@ -493,8 +493,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const heatColor = (val: number) => {
     if (!val) return '#f1f5f9';
     const intensity = Math.min(Math.abs(val) / maxAbsHeat, 1);
-    if (val > 0) return `rgba(16,185,129,${0.15 + intensity * 0.75})`;
-    return `rgba(239,68,68,${0.15 + intensity * 0.75})`;
+    if (val > 0) return `rgba(239,68,68,${0.15 + intensity * 0.75})`;   // profit = red
+    return `rgba(16,185,129,${0.15 + intensity * 0.75})`;                // loss = green
   };
 
   const getHeatKey = (year: string, col: string, idx: number): string => {
@@ -933,7 +933,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   <Tooltip />
                   <Bar dataKey="count" name="Trades" radius={[4, 4, 0, 0]}>
                     {returnBuckets.map((b, i) => (
-                      <Cell key={i} fill={b.min >= 0 ? '#10b981' : '#ef4444'} />
+                      <Cell key={i} fill={b.min >= 0 ? '#ef4444' : '#10b981'} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -985,7 +985,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                         <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'P&L']} />
                         <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                           {data.map((entry, i) => (
-                            <Cell key={i} fill={entry.value >= 0 ? '#10b981' : '#ef4444'} />
+                            <Cell key={i} fill={entry.value >= 0 ? '#ef4444' : '#10b981'} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -1023,7 +1023,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'P&L']} />
                   <Bar dataKey="pnl" name="P&L" radius={[2, 2, 0, 0]}>
                     {streakData.data.map((entry, i) => (
-                      <Cell key={i} fill={entry.isWin ? '#10b981' : '#ef4444'} />
+                      <Cell key={i} fill={entry.isWin ? '#ef4444' : '#10b981'} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -1186,18 +1186,32 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                         dataKey="size"
                         aspectRatio={4 / 3}
                         content={({ x, y, width, height, name, mvPct, isOver }: any) => {
+                          // Guard: recharts passes a synthetic root node — skip it
+                          if (!name || width <= 0 || height <= 0) return <g />;
                           const fill = isOver ? '#ef4444' : '#6366f1';
+                          const showName = width > 28 && height > 18;
+                          const showPct = width > 28 && height > 32;
+                          const midY = y + height / 2;
+                          const pctLabel = typeof mvPct === 'number' ? mvPct.toFixed(1) + '%' : '';
                           return (
                             <g>
-                              <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.8} stroke="#fff" strokeWidth={2} rx={4} />
-                              {width > 40 && height > 25 && (
-                                <text x={x + width / 2} y={y + height / 2 - (height > 40 ? 7 : 0)} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={Math.min(width / (name?.length || 1) * 1.2, 12)}>
+                              <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.85} stroke="#fff" strokeWidth={1.5} rx={3} />
+                              {showName && (
+                                <text
+                                  x={x + width / 2}
+                                  y={showPct ? midY - 7 : midY}
+                                  textAnchor="middle"
+                                  dominantBaseline="middle"
+                                  fill="white"
+                                  fontSize={Math.min(Math.max(width / ((name?.length || 1) + 1) * 1.5, 8), 13)}
+                                  fontWeight="600"
+                                >
                                   {name}
                                 </text>
                               )}
-                              {width > 40 && height > 40 && (
-                                <text x={x + width / 2} y={y + height / 2 + 8} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={9}>
-                                  {(mvPct as number)?.toFixed(1)}%
+                              {showPct && pctLabel && (
+                                <text x={x + width / 2} y={midY + 8} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.85)" fontSize={9}>
+                                  {pctLabel}
                                 </text>
                               )}
                             </g>
@@ -1313,14 +1327,14 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             <p>Avg Cost: ${d.cost?.toFixed(2)}</p>
                             <p>Last Price: ${d.price?.toFixed(2)}</p>
                             <p>MV: ${Math.round(d.mv).toLocaleString()}</p>
-                            <p style={{ color: d.pnlPct >= 0 ? '#10b981' : '#ef4444' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
+                            <p style={{ color: d.pnlPct >= 0 ? '#ef4444' : '#10b981' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
                           </div>
                         );
                       }}
                     />
                     <Scatter data={scatterData} fill="#6366f1">
                       {scatterData.map((d: any, i: number) => (
-                        <Cell key={i} fill={d.pnlPct >= 0 ? '#10b981' : '#ef4444'} fillOpacity={0.7} />
+                        <Cell key={i} fill={d.pnlPct >= 0 ? '#ef4444' : '#10b981'} fillOpacity={0.7} />
                       ))}
                     </Scatter>
                     <ReferenceLine
