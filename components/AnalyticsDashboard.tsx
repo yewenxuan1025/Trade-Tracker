@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import {
   BarChart, Bar, LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,7 +9,7 @@ import {
 import {
   Info, TrendingUp, TrendingDown, Activity, BarChart3,
   PieChart as PieChartIcon, Target, Zap, Award, Clock,
-  Upload, X, ChevronDown, ChevronUp, Layers, Archive, Calendar
+  Upload, X, ChevronDown, ChevronUp, Layers, Archive, Calendar, Download
 } from 'lucide-react';
 import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData } from '../types';
 import { calculatePortfolioAnalysis } from '../services/excelService';
@@ -68,15 +69,26 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
   </div>
 );
 
-const DateRangePicker: React.FC<{ start: string; end: string; onStart: (v: string) => void; onEnd: (v: string) => void }> = ({ start, end, onStart, onEnd }) => (
-  <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm self-end">
-    <Calendar size={12} className="text-slate-400" />
-    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Period:</span>
-    <input type="date" value={start} onChange={e => onStart(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50" />
-    <span className="text-slate-300 font-bold text-xs">–</span>
-    <input type="date" value={end} onChange={e => onEnd(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50" />
-  </div>
-);
+// ── ISO week number helper ──────────────────────────────────────────────────
+const getISOWeek = (dateStr: string): string => {
+  const d = new Date(dateStr);
+  const year = d.getFullYear();
+  const startOfYear = new Date(year, 0, 1);
+  const week = Math.ceil((((d.getTime() - startOfYear.getTime()) / 86400000) + startOfYear.getDay() + 1) / 7);
+  return `${year}-W${String(Math.min(week, 52)).padStart(2, '0')}`;
+};
+
+const getFrequencyKey = (dateStr: string, freq: string): string => {
+  const d = new Date(dateStr);
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  if (freq === 'annual') return `${year}`;
+  if (freq === 'quarterly') return `${year}-Q${Math.floor(month / 3) + 1}`;
+  if (freq === 'weekly') return getISOWeek(dateStr);
+  return `${year}-${String(month + 1).padStart(2, '0')}`;
+};
+
+type HeatFreq = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
 const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   pnlData,
@@ -93,51 +105,26 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [concentrationThreshold, setConcentrationThreshold] = useState(10);
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
+  const [heatFreq, setHeatFreq] = useState<HeatFreq>('monthly');
 
-  // ── Per-tab date range state ──────────────────────────────────────────────────
+  // ── Single global date range ──────────────────────────────────────────────
   const today = new Date().toISOString().split('T')[0];
-  const [pnlStart, setPnlStart] = useState('');
-  const [pnlEnd, setPnlEnd] = useState(today);
-  const [tradesStart, setTradesStart] = useState('');
-  const [tradesEnd, setTradesEnd] = useState(today);
-  const [stocksStart, setStocksStart] = useState('');
-  const [stocksEnd, setStocksEnd] = useState(today);
-  const [portfolioStart, setPortfolioStart] = useState('');
-  const [portfolioEnd, setPortfolioEnd] = useState(today);
-  const [benchmarkStart, setBenchmarkStart] = useState('');
-  const [benchmarkEnd, setBenchmarkEnd] = useState(today);
+  const [globalStart, setGlobalStart] = useState('');
+  const [globalEnd, setGlobalEnd] = useState(today);
 
-  // Initialize start dates from earliest pnlData
   useEffect(() => {
     if (!pnlData.length) return;
     const earliest = pnlData.map(p => p.sellDate).filter(Boolean).sort()[0] || '2020-01-01';
-    setPnlStart(s => s || earliest);
-    setTradesStart(s => s || earliest);
-    setStocksStart(s => s || earliest);
-    setPortfolioStart(s => s || earliest);
-    setBenchmarkStart(s => s || earliest);
+    setGlobalStart(s => s || earliest);
   }, [pnlData]);
 
-  // ── Per-tab filtered data ──────────────────────────────────────────────────────
-  const pnlFiltered = useMemo(() =>
-    pnlData.filter(p => p.sellDate && (!pnlStart || p.sellDate >= pnlStart) && p.sellDate <= pnlEnd),
-    [pnlData, pnlStart, pnlEnd]);
-
-  const tradesFiltered = useMemo(() =>
-    pnlData.filter(p => p.sellDate && (!tradesStart || p.sellDate >= tradesStart) && p.sellDate <= tradesEnd),
-    [pnlData, tradesStart, tradesEnd]);
-
-  const stocksFiltered = useMemo(() =>
-    pnlData.filter(p => p.sellDate && (!stocksStart || p.sellDate >= stocksStart) && p.sellDate <= stocksEnd),
-    [pnlData, stocksStart, stocksEnd]);
-
-  const portfolioFiltered = useMemo(() =>
-    pnlData.filter(p => p.sellDate && (!portfolioStart || p.sellDate >= portfolioStart) && p.sellDate <= portfolioEnd),
-    [pnlData, portfolioStart, portfolioEnd]);
+  // ── Single filtered data memo ──────────────────────────────────────────────
+  const filtered = useMemo(() =>
+    pnlData.filter(p => p.sellDate && (!globalStart || p.sellDate >= globalStart) && p.sellDate <= globalEnd),
+    [pnlData, globalStart, globalEnd]);
 
   // ── pnlMetrics ──────────────────────────────────────────────────────────────
   const pnlMetrics = useMemo(() => {
-    const filtered = pnlFiltered;
     const wins: number[] = [], losses: number[] = [];
     filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
@@ -173,11 +160,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       medianLoss: median(losses),
       totalTrades: filtered.length,
     };
-  }, [pnlFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
   // ── cumulativeData ───────────────────────────────────────────────────────────
   const cumulativeData = useMemo(() => {
-    const sorted = [...pnlFiltered]
+    const sorted = [...filtered]
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let cum = 0, peak = 0;
     return sorted.map(p => {
@@ -193,33 +180,36 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         dailyPnl: Math.round(usd),
       };
     });
-  }, [pnlFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
-  // ── monthlyHeatmap ───────────────────────────────────────────────────────────
-  const monthlyHeatmap = useMemo(() => {
+  // ── heatmapData (supports weekly/monthly/quarterly/annual) ───────────────────
+  const heatmapData = useMemo(() => {
     const map = new Map<string, { total: number; count: number }>();
-    pnlFiltered.forEach(p => {
+    filtered.forEach(p => {
       if (!p.sellDate) return;
-      const key = p.sellDate.substring(0, 7);
+      const key = getFrequencyKey(p.sellDate, heatFreq);
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
       const cur = map.get(key) || { total: 0, count: 0 };
       map.set(key, { total: cur.total + usd, count: cur.count + 1 });
     });
-    // Compute annual totals for % contribution per month
-    const annualTotals = new Map<string, number>();
+    // Compute period totals for % contribution
+    const periodTotals = new Map<string, number>();
     map.forEach((v, k) => {
-      const yr = k.substring(0, 4);
-      annualTotals.set(yr, (annualTotals.get(yr) || 0) + v.total);
+      const parentKey = heatFreq === 'annual' ? k :
+        heatFreq === 'quarterly' ? k.substring(0, 4) :
+        heatFreq === 'weekly' ? k.substring(0, 4) :
+        k.substring(0, 4);
+      periodTotals.set(parentKey, (periodTotals.get(parentKey) || 0) + v.total);
     });
     const result = new Map<string, { total: number; count: number; pct: number }>();
     map.forEach((v, k) => {
-      const yr = k.substring(0, 4);
-      const yrTotal = annualTotals.get(yr) || 0;
-      result.set(k, { ...v, pct: yrTotal !== 0 ? (v.total / Math.abs(yrTotal)) * 100 : 0 });
+      const parentKey = heatFreq === 'annual' ? k : k.substring(0, 4);
+      const parentTotal = periodTotals.get(parentKey) || 0;
+      result.set(k, { ...v, pct: parentTotal !== 0 ? (v.total / Math.abs(parentTotal)) * 100 : 0 });
     });
     return result;
-  }, [pnlFiltered, marketConstants]);
+  }, [filtered, marketConstants, heatFreq]);
 
   // ── returnBuckets ────────────────────────────────────────────────────────────
   const returnBuckets = useMemo(() => {
@@ -233,13 +223,13 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { range: '20 to 50%', min: 20, max: 50, count: 0 },
       { range: '>50%', min: 50, max: Infinity, count: 0 },
     ];
-    tradesFiltered.forEach(p => {
+    filtered.forEach(p => {
       const r = p.returnPercent || 0;
       const b = buckets.find(b => r >= b.min && r < b.max) || buckets[buckets.length - 1];
       b.count++;
     });
     return buckets;
-  }, [tradesFiltered]);
+  }, [filtered]);
 
   // ── pnlByDimension ───────────────────────────────────────────────────────────
   const pnlByDimension = useMemo(() => {
@@ -254,7 +244,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const byType = new Map<string, number>(),
       byCategory = new Map<string, number>(),
       byClass = new Map<string, number>();
-    tradesFiltered.forEach(p => {
+    filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
       const info = stockMap.get(p.stock.toUpperCase()) || { type: 'Other', category: 'Other', class: 'Other' };
@@ -267,11 +257,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         .map(([name, value]) => ({ name, value: Math.round(value) }))
         .sort((a, b) => b.value - a.value);
     return { byType: toArr(byType), byCategory: toArr(byCategory), byClass: toArr(byClass) };
-  }, [tradesFiltered, lookupData, marketConstants]);
+  }, [filtered, lookupData, marketConstants]);
 
   // ── streakData ───────────────────────────────────────────────────────────────
   const streakData = useMemo(() => {
-    const sorted = [...tradesFiltered]
+    const sorted = [...filtered]
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let curStreak = 0, maxWin = 0, maxLoss = 0;
     const data = sorted.map(p => {
@@ -288,12 +278,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       return { date: p.sellDate.substring(0, 7), pnl: Math.round(Math.abs(usd)), isWin, streak: curStreak };
     });
     return { data, currentStreak: curStreak, maxWin, maxLoss };
-  }, [tradesFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
   // ── holdingOutcome ───────────────────────────────────────────────────────────
   const holdingOutcome = useMemo(() => {
-    const wins = tradesFiltered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL > 0).map(p => p.holdingDays || 0);
-    const losses = tradesFiltered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL <= 0).map(p => p.holdingDays || 0);
+    const wins = filtered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL > 0).map(p => p.holdingDays || 0);
+    const losses = filtered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL <= 0).map(p => p.holdingDays || 0);
     const avg = (arr: number[]) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0);
     const med = (arr: number[]) => {
       if (!arr.length) return 0;
@@ -305,9 +295,9 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { category: 'Winning Trades', avg: avg(wins), median: med(wins) },
       { category: 'Losing Trades', avg: avg(losses), median: med(losses) },
     ];
-  }, [tradesFiltered]);
+  }, [filtered]);
 
-  // ── holdingDistribution ──────────────────────────────────────────────────────
+  // ── holdingDistribution (now used in Trades tab) ──────────────────────────────
   const holdingDistribution = useMemo(() => {
     const buckets = [
       { range: '0-7d', count: 0 },
@@ -317,7 +307,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { range: '6-12mo', count: 0 },
       { range: '>1yr', count: 0 },
     ];
-    portfolioFiltered.forEach(p => {
+    filtered.forEach(p => {
       const d = p.holdingDays || 0;
       if (d <= 7) buckets[0].count++;
       else if (d <= 30) buckets[1].count++;
@@ -327,12 +317,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       else buckets[5].count++;
     });
     return buckets;
-  }, [portfolioFiltered]);
+  }, [filtered]);
 
   // ── stockStats ───────────────────────────────────────────────────────────────
   const stockStats = useMemo(() => {
     const stats = new Map<string, { count: number; wins: number; totalPnl: number }>();
-    stocksFiltered.forEach(p => {
+    filtered.forEach(p => {
       const key = p.stock.toUpperCase();
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
@@ -354,13 +344,13 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 20);
-  }, [stocksFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
   // ── expectancyMetrics ────────────────────────────────────────────────────────
   const expectancyMetrics = useMemo(() => {
-    const wins = portfolioFiltered.filter(p => p.realizedPnL > 0);
-    const losses = portfolioFiltered.filter(p => p.realizedPnL <= 0);
-    const total = portfolioFiltered.length;
+    const wins = filtered.filter(p => p.realizedPnL > 0);
+    const losses = filtered.filter(p => p.realizedPnL <= 0);
+    const total = filtered.length;
     if (total === 0)
       return { winRate: 0, lossRate: 0, avgWin: 0, avgLoss: 0, expectancy: 0, kelly: 0, halfKelly: 0 };
     const getUsd = (p: PnLData) => p.realizedPnL / getRate(p.market || '', marketConstants);
@@ -371,12 +361,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const expectancy = winRate * avgWin - lossRate * avgLoss;
     const kelly = avgLoss > 0 ? (winRate - lossRate / (avgWin / avgLoss)) * 100 : 0;
     return { winRate: winRate * 100, lossRate: lossRate * 100, avgWin, avgLoss, expectancy, kelly, halfKelly: kelly / 2 };
-  }, [portfolioFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
   // ── topWinnersLosers ─────────────────────────────────────────────────────────
   const topWinnersLosers = useMemo(() => {
     const byStock = new Map<string, { stock: string; pnl: number }>();
-    pnlFiltered.forEach(p => {
+    filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
       const cur = byStock.get(p.stock) || { stock: p.stock, pnl: 0 };
@@ -385,7 +375,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     });
     const arr = Array.from(byStock.values()).sort((a, b) => b.pnl - a.pnl);
     return { winners: arr.filter(x => x.pnl > 0), losers: arr.filter(x => x.pnl < 0).reverse() };
-  }, [pnlFiltered, marketConstants]);
+  }, [filtered, marketConstants]);
 
   // ── currentHoldings (position age) ───────────────────────────────────────────
   const currentHoldings = useMemo(() => {
@@ -453,17 +443,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       .filter(x => x.benchmark !== null);
   }, [navData, benchmarkNav]);
 
-  // ── Heatmap helpers ───────────────────────────────────────────────────────────
-  const heatmapYears = [...new Set([...monthlyHeatmap.keys()].map(k => k.substring(0, 4)))].sort();
-  const heatmapMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const maxAbsHeat = Math.max(...[...monthlyHeatmap.values()].map(v => Math.abs(v.total)), 1);
-  const heatColor = (val: number) => {
-    if (!val) return '#f1f5f9';
-    const intensity = Math.min(Math.abs(val) / maxAbsHeat, 1);
-    if (val > 0) return `rgba(16,185,129,${0.15 + intensity * 0.75})`;
-    return `rgba(239,68,68,${0.15 + intensity * 0.75})`;
-  };
-
   // ── P&L by dimension aggregation for donut charts ─────────────────────────────
   const portfolioByClass = useMemo(() => {
     const m = new Map<string, number>();
@@ -497,13 +476,141 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const displayWinners = isWinnersExpanded ? topWinnersLosers.winners : topWinnersLosers.winners.slice(0, 5);
   const displayLosers = isLosersExpanded ? topWinnersLosers.losers : topWinnersLosers.losers.slice(0, 5);
 
+  // ── Heatmap display helpers ────────────────────────────────────────────────────
+  const heatmapYears = useMemo(() =>
+    [...new Set([...heatmapData.keys()].map(k => k.substring(0, 4)))].sort(),
+    [heatmapData]);
+
+  const heatmapColumns = useMemo((): string[] => {
+    if (heatFreq === 'monthly') return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    if (heatFreq === 'quarterly') return ['Q1', 'Q2', 'Q3', 'Q4'];
+    if (heatFreq === 'annual') return ['Annual'];
+    // weekly: W01..W52
+    return Array.from({ length: 52 }, (_, i) => `W${String(i + 1).padStart(2, '0')}`);
+  }, [heatFreq]);
+
+  const maxAbsHeat = Math.max(...[...heatmapData.values()].map(v => Math.abs(v.total)), 1);
+  const heatColor = (val: number) => {
+    if (!val) return '#f1f5f9';
+    const intensity = Math.min(Math.abs(val) / maxAbsHeat, 1);
+    if (val > 0) return `rgba(239,68,68,${0.15 + intensity * 0.75})`;   // profit = red
+    return `rgba(16,185,129,${0.15 + intensity * 0.75})`;                // loss = green
+  };
+
+  const getHeatKey = (year: string, col: string, idx: number): string => {
+    if (heatFreq === 'monthly') return `${year}-${String(idx + 1).padStart(2, '0')}`;
+    if (heatFreq === 'quarterly') return `${year}-${col}`;
+    if (heatFreq === 'annual') return year;
+    return `${year}-${col}`;
+  };
+
+  // ── Analytics Export ───────────────────────────────────────────────────────────
+  const handleExportAnalytics = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: P&L Metrics
+    const metricsRows = [
+      { Metric: 'Period Start', Value: globalStart },
+      { Metric: 'Period End', Value: globalEnd },
+      { Metric: 'Total Trades', Value: pnlMetrics.totalTrades },
+      { Metric: 'Net Realized P&L (USD)', Value: Math.round(pnlMetrics.totalPnl) },
+      { Metric: 'Win Rate (%)', Value: pnlMetrics.winRate.toFixed(2) },
+      { Metric: 'Profit Factor', Value: pnlMetrics.profitFactor.toFixed(2) },
+      { Metric: 'Avg P&L / Trade (USD)', Value: Math.round(pnlMetrics.totalPnl / Math.max(pnlMetrics.totalTrades, 1)) },
+      { Metric: 'Total Win (USD)', Value: Math.round(pnlMetrics.totalWin) },
+      { Metric: 'Winning Trades', Value: pnlMetrics.wins.length },
+      { Metric: 'Avg Win (USD)', Value: Math.round(pnlMetrics.avgWin) },
+      { Metric: 'Median Win (USD)', Value: Math.round(pnlMetrics.medianWin) },
+      { Metric: 'Total Loss (USD)', Value: Math.round(pnlMetrics.totalLoss) },
+      { Metric: 'Losing Trades', Value: pnlMetrics.losses.length },
+      { Metric: 'Avg Loss (USD)', Value: Math.round(pnlMetrics.avgLoss) },
+      { Metric: 'Median Loss (USD)', Value: Math.round(pnlMetrics.medianLoss) },
+      { Metric: 'Expectancy (USD)', Value: Math.round(expectancyMetrics.expectancy) },
+      { Metric: 'Kelly %', Value: expectancyMetrics.kelly.toFixed(2) },
+      { Metric: 'Half-Kelly %', Value: expectancyMetrics.halfKelly.toFixed(2) },
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(metricsRows), 'P&L Metrics');
+
+    // Sheet 2: Heatmap
+    const heatRows: any[] = [];
+    heatmapYears.forEach(year => {
+      const row: any = { Year: year };
+      heatmapColumns.forEach((col, idx) => {
+        const key = getHeatKey(year, col, idx);
+        const d = heatmapData.get(key);
+        row[col] = d ? Math.round(d.total) : 0;
+      });
+      heatRows.push(row);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(heatRows), 'P&L Heatmap');
+
+    // Sheet 3: Top Winners & Losers
+    const winnersRows = topWinnersLosers.winners.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl) }));
+    const losersRows = topWinnersLosers.losers.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl) }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(winnersRows), 'Top Winners');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(losersRows), 'Top Losers');
+
+    // Sheet 4: Stock Performance
+    const stockRows = stockStats.map(s => ({
+      Stock: s.stock, Trades: s.count, Wins: s.wins, Losses: s.losses,
+      'Win Rate (%)': s.winRate, 'Avg P&L (USD)': s.avgPnl, 'Total P&L (USD)': s.totalPnl,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stockRows), 'Stock Performance');
+
+    // Sheet 5: Return Distribution
+    const returnRows = returnBuckets.map(b => ({ Range: b.range, 'Trade Count': b.count }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(returnRows), 'Return Distribution');
+
+    // Sheet 6: Holding Period Distribution
+    const holdingRows = holdingDistribution.map(b => ({ Range: b.range, 'Trade Count': b.count }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(holdingRows), 'Holding Period');
+
+    // Sheet 7: P&L by Dimension
+    const dimRows = [
+      ...pnlByDimension.byType.map(x => ({ Dimension: 'Type', Name: x.name, 'P&L (USD)': x.value })),
+      ...pnlByDimension.byCategory.map(x => ({ Dimension: 'Category', Name: x.name, 'P&L (USD)': x.value })),
+      ...pnlByDimension.byClass.map(x => ({ Dimension: 'Class', Name: x.name, 'P&L (USD)': x.value })),
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dimRows), 'P&L by Dimension');
+
+    XLSX.writeFile(wb, `Analytics_${globalStart}_to_${globalEnd}.xlsx`);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="flex-shrink-0 px-6 pt-5 pb-3 border-b border-slate-200 bg-white">
-        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <Activity size={20} className="text-blue-600" /> Analytics
-        </h2>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <Activity size={20} className="text-blue-600" /> Analytics
+          </h2>
+          {/* Global Period Picker + Export */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+              <Calendar size={12} className="text-slate-400" />
+              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Period:</span>
+              <input
+                type="date"
+                value={globalStart}
+                onChange={e => setGlobalStart(e.target.value)}
+                className="text-xs font-bold border border-slate-200 rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              />
+              <span className="text-slate-300 font-bold text-xs">–</span>
+              <input
+                type="date"
+                value={globalEnd}
+                onChange={e => setGlobalEnd(e.target.value)}
+                className="text-xs font-bold border border-slate-200 rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+              />
+            </div>
+            <button
+              onClick={handleExportAnalytics}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-semibold hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              <Download size={13} /> Export
+            </button>
+          </div>
+        </div>
         <div className="flex gap-1 mt-3">
           {(['pnl', 'trades', 'stocks', 'portfolio', 'benchmark'] as const).map(tab => (
             <button
@@ -525,8 +632,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ P&L TAB ══════════════════════════════════ */}
         {activeTab === 'pnl' && (
           <>
-            <DateRangePicker start={pnlStart} end={pnlEnd} onStart={setPnlStart} onEnd={setPnlEnd} />
-
             {/* 4 top metric cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Card>
@@ -733,34 +838,58 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </ResponsiveContainer>
             </Card>
 
-            {/* A2: Monthly Heatmap */}
+            {/* A2: P&L Heatmap with frequency selector */}
             <Card>
-              <SectionHeader
-                title="Monthly P&L Heatmap"
-                info="Each cell shows total P&L for that month. Green = profit, Red = loss. Darker = larger magnitude."
-                icon={<BarChart3 size={16} />}
-              />
+              <div className="flex items-center justify-between mb-3">
+                <SectionHeader
+                  title="P&L Heatmap"
+                  info="P&L grouped by the selected frequency. Green = profit, Red = loss. Darker = larger magnitude. Second line = % of annual total."
+                  icon={<BarChart3 size={16} />}
+                />
+                {/* Frequency selector */}
+                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+                  {(['weekly', 'monthly', 'quarterly', 'annual'] as HeatFreq[]).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setHeatFreq(f)}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-colors capitalize ${
+                        heatFreq === f ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {heatmapYears.length === 0 ? (
                 <p className="text-slate-400 text-sm text-center py-8">No data available</p>
               ) : (
                 <div className="overflow-x-auto">
-                  <div className="min-w-[600px]">
-                    <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: 'auto repeat(12, 1fr)' }}>
+                  <div className={heatFreq === 'weekly' ? 'min-w-[900px]' : 'min-w-[400px]'}>
+                    {/* Column headers */}
+                    <div
+                      className="grid gap-1 mb-1"
+                      style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
+                    >
                       <div />
-                      {heatmapMonths.map(m => (
-                        <div key={m} className="text-[9px] text-slate-400 text-center">{m}</div>
+                      {heatmapColumns.map(col => (
+                        <div key={col} className="text-[9px] text-slate-400 text-center truncate">{col}</div>
                       ))}
                     </div>
                     {heatmapYears.map(year => (
-                      <div key={year} className="grid gap-1 mb-1" style={{ gridTemplateColumns: 'auto repeat(12, 1fr)' }}>
+                      <div
+                        key={year}
+                        className="grid gap-1 mb-1"
+                        style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
+                      >
                         <div className="text-[9px] text-slate-500 flex items-center pr-2">{year}</div>
-                        {heatmapMonths.map((_, mi) => {
-                          const key = `${year}-${String(mi + 1).padStart(2, '0')}`;
-                          const data = monthlyHeatmap.get(key);
+                        {heatmapColumns.map((col, idx) => {
+                          const key = getHeatKey(year, col, idx);
+                          const data = heatmapData.get(key);
                           const val = data?.total || 0;
                           return (
                             <div
-                              key={mi}
+                              key={col}
                               title={data ? `${key}: $${Math.round(val).toLocaleString()} (${data.count} trades)` : key}
                               className="h-10 rounded cursor-default flex flex-col items-center justify-center text-[9px] font-bold leading-tight"
                               style={{
@@ -789,7 +918,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ TRADES TAB ══════════════════════════════════ */}
         {activeTab === 'trades' && (
           <>
-            <DateRangePicker start={tradesStart} end={tradesEnd} onStart={setTradesStart} onEnd={setTradesEnd} />
             {/* B1: Return Distribution */}
             <Card>
               <SectionHeader
@@ -805,7 +933,29 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   <Tooltip />
                   <Bar dataKey="count" name="Trades" radius={[4, 4, 0, 0]}>
                     {returnBuckets.map((b, i) => (
-                      <Cell key={i} fill={b.min >= 0 ? '#10b981' : '#ef4444'} />
+                      <Cell key={i} fill={b.min >= 0 ? '#ef4444' : '#10b981'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* B1.5: Holding Period Distribution (moved from Portfolio) */}
+            <Card>
+              <SectionHeader
+                title="Holding Period Distribution"
+                info="Distribution of all trades by how long they were held before closing."
+                icon={<Clock size={16} />}
+              />
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={holdingDistribution}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="range" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Bar dataKey="count" name="Trades" radius={[4, 4, 0, 0]}>
+                    {holdingDistribution.map((_, i) => (
+                      <Cell key={i} fill={['#fdba74', '#fb923c', '#f97316', '#ea580c', '#c2410c', '#9a3412'][i % 6]} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -835,7 +985,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                         <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'P&L']} />
                         <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                           {data.map((entry, i) => (
-                            <Cell key={i} fill={entry.value >= 0 ? '#10b981' : '#ef4444'} />
+                            <Cell key={i} fill={entry.value >= 0 ? '#ef4444' : '#10b981'} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -873,7 +1023,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'P&L']} />
                   <Bar dataKey="pnl" name="P&L" radius={[2, 2, 0, 0]}>
                     {streakData.data.map((entry, i) => (
-                      <Cell key={i} fill={entry.isWin ? '#10b981' : '#ef4444'} />
+                      <Cell key={i} fill={entry.isWin ? '#ef4444' : '#10b981'} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -905,7 +1055,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ STOCKS TAB ══════════════════════════════════ */}
         {activeTab === 'stocks' && (
           <>
-            <DateRangePicker start={stocksStart} end={stocksEnd} onStart={setStocksStart} onEnd={setStocksEnd} />
           <Card>
             <SectionHeader
               title="Stock Frequency & Performance"
@@ -991,8 +1140,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ PORTFOLIO TAB ══════════════════════════════════ */}
         {activeTab === 'portfolio' && (
           <>
-            <DateRangePicker start={portfolioStart} end={portfolioEnd} onStart={setPortfolioStart} onEnd={setPortfolioEnd} />
-
             {/* D2: Concentration Risk Treemap */}
             {group2Data.length > 0 && (
               <Card>
@@ -1015,36 +1162,73 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                     <span className="text-xs text-slate-500">%</span>
                   </div>
                 </div>
-                <div style={{ height: 300 }}>
-                  <Treemap
-                    width={undefined as any}
-                    height={300}
-                    data={group2Data
-                      .filter((h: any) => (h.LastMV || 0) > 0)
-                      .map((h: any) => ({
-                        name: h.Stock,
-                        size: Math.abs(h.LastMV || 0),
-                        mvPct: (h.MVPct || 0) * 100,
-                        fill: ((h.MVPct || 0) * 100) > concentrationThreshold ? '#ef4444' : '#6366f1',
-                      }))}
-                    dataKey="size"
-                    aspectRatio={4 / 3}
-                    content={({ x, y, width, height, name, mvPct, fill }: any) => (
-                      <g>
-                        <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.8} stroke="#fff" strokeWidth={2} rx={4} />
-                        {width > 40 && height > 25 && (
-                          <text x={x + width / 2} y={y + height / 2} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={Math.min(width / (name?.length || 1) * 1.2, 12)}>
-                            {name}
-                          </text>
-                        )}
-                        {width > 40 && height > 40 && (
-                          <text x={x + width / 2} y={y + height / 2 + 14} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={9}>
-                            {mvPct?.toFixed(1)}%
-                          </text>
-                        )}
-                      </g>
-                    )}
-                  />
+                {(() => {
+                  const treemapData = group2Data
+                    .filter((h: any) => (h.LastMV || 0) > 0)
+                    .map((h: any) => ({
+                      name: h.Stock,
+                      size: Math.abs(h.LastMV || 0),
+                      mvPct: (h.MVPct || 0) * 100,
+                      isOver: ((h.MVPct || 0) * 100) > concentrationThreshold,
+                    }));
+                  const totalMv = treemapData.reduce((a: number, b: any) => a + b.size, 0);
+                  // Compute MVPct from actual data if MVPct is 0
+                  const withPct = treemapData.map((d: any) => ({
+                    ...d,
+                    mvPct: d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0),
+                    isOver: (d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0)) > concentrationThreshold,
+                  }));
+                  if (withPct.length === 0) return <p className="text-slate-400 text-sm text-center py-8">No holdings data available</p>;
+                  return (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <Treemap
+                        data={withPct}
+                        dataKey="size"
+                        aspectRatio={4 / 3}
+                        content={({ x, y, width, height, name, mvPct, isOver }: any) => {
+                          // Guard: recharts passes a synthetic root node — skip it
+                          if (!name || width <= 0 || height <= 0) return <g />;
+                          const fill = isOver ? '#ef4444' : '#6366f1';
+                          const showName = width > 28 && height > 18;
+                          const showPct = width > 28 && height > 32;
+                          const midY = y + height / 2;
+                          const pctLabel = typeof mvPct === 'number' ? mvPct.toFixed(1) + '%' : '';
+                          return (
+                            <g>
+                              <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.85} stroke="#fff" strokeWidth={1.5} rx={3} />
+                              {showName && (
+                                <text
+                                  x={x + width / 2}
+                                  y={showPct ? midY - 7 : midY}
+                                  textAnchor="middle"
+                                  dominantBaseline="middle"
+                                  fill="white"
+                                  fontSize={Math.min(Math.max(width / ((name?.length || 1) + 1) * 1.5, 8), 13)}
+                                  fontWeight="600"
+                                >
+                                  {name}
+                                </text>
+                              )}
+                              {showPct && pctLabel && (
+                                <text x={x + width / 2} y={midY + 8} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.85)" fontSize={9}>
+                                  {pctLabel}
+                                </text>
+                              )}
+                            </g>
+                          );
+                        }}
+                      />
+                    </ResponsiveContainer>
+                  );
+                })()}
+              </Card>
+            )}
+            {group2Data.length === 0 && (
+              <Card>
+                <div className="text-center py-12">
+                  <PieChartIcon size={40} className="mx-auto text-slate-300 mb-3" />
+                  <p className="text-slate-400 text-sm">No current holdings data available.</p>
+                  <p className="text-slate-400 text-xs mt-1">Upload transaction data to see portfolio analysis.</p>
                 </div>
               </Card>
             )}
@@ -1143,14 +1327,14 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             <p>Avg Cost: ${d.cost?.toFixed(2)}</p>
                             <p>Last Price: ${d.price?.toFixed(2)}</p>
                             <p>MV: ${Math.round(d.mv).toLocaleString()}</p>
-                            <p style={{ color: d.pnlPct >= 0 ? '#10b981' : '#ef4444' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
+                            <p style={{ color: d.pnlPct >= 0 ? '#ef4444' : '#10b981' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
                           </div>
                         );
                       }}
                     />
                     <Scatter data={scatterData} fill="#6366f1">
                       {scatterData.map((d: any, i: number) => (
-                        <Cell key={i} fill={d.pnlPct >= 0 ? '#10b981' : '#ef4444'} fillOpacity={0.7} />
+                        <Cell key={i} fill={d.pnlPct >= 0 ? '#ef4444' : '#10b981'} fillOpacity={0.7} />
                       ))}
                     </Scatter>
                     <ReferenceLine
@@ -1189,35 +1373,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 ))}
               </div>
             </Card>
-
-            {/* D6: Holding Period Distribution */}
-            <Card>
-              <SectionHeader
-                title="Holding Period Distribution"
-                info="Distribution of all trades by how long they were held before closing."
-                icon={<Clock size={16} />}
-              />
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={holdingDistribution}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="range" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} />
-                  <Tooltip />
-                  <Bar dataKey="count" name="Trades" radius={[4, 4, 0, 0]}>
-                    {holdingDistribution.map((_, i) => (
-                      <Cell key={i} fill={['#fdba74', '#fb923c', '#f97316', '#ea580c', '#c2410c', '#9a3412'][i % 6]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
           </>
         )}
 
         {/* ══════════════════════════════════ BENCHMARK TAB ══════════════════════════════════ */}
         {activeTab === 'benchmark' && (
           <>
-            <DateRangePicker start={benchmarkStart} end={benchmarkEnd} onStart={setBenchmarkStart} onEnd={setBenchmarkEnd} />
             {benchmarkNav.length === 0 ? (
               <Card>
                 <div className="text-center py-20">

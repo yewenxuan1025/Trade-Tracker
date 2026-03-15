@@ -199,8 +199,19 @@ const App: React.FC = () => {
           };
       });
 
-      // 2. Append Transactions
-      setTransactions(prev => [...prev, ...result.transactions]);
+      // 2. Append Transactions (enrich with lookupData: fill missing name/lastPrice)
+      setTransactions(prev => {
+          const enriched = result.transactions.map(txn => {
+              const ticker = txn.stock?.toUpperCase() || '';
+              const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === ticker);
+              return {
+                  ...txn,
+                  name: txn.name || lookup?.companyName || ticker,
+                  lastPrice: txn.lastPrice || lookup?.closePrice || 0,
+              };
+          });
+          return [...prev, ...enriched];
+      });
       
       // 3. Append Option Transactions
       setOptionTransactions(prev => [...prev, ...result.optionTransactions]);
@@ -453,7 +464,19 @@ const App: React.FC = () => {
     try {
         const result = await parseExcelFile(file);
         if (section === 'lookup') setLookupData(result.lookup);
-        else if (section === 'transaction') setTransactions(result.transactions);
+        else if (section === 'transaction') {
+            // Enrich new transactions with existing lookupData: fill missing name & lastPrice
+            const enriched = result.transactions.map(txn => {
+                const ticker = txn.stock?.toUpperCase() || '';
+                const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === ticker);
+                return {
+                    ...txn,
+                    name: txn.name || lookup?.companyName || ticker,
+                    lastPrice: txn.lastPrice || lookup?.closePrice || 0,
+                };
+            });
+            setTransactions(enriched);
+        }
         else if (section === 'option_transaction') setOptionTransactions(result.optionTransactions);
         else if (section === 'pnl') setPnlData(result.pnl);
         else if (section === 'nav') setNavData(result.navData);
