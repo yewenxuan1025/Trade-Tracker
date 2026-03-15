@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { LayoutDashboard, Table, LineChart, PieChart, Settings, LogOut, ArrowLeft, Layers, TrendingUp, BarChart3, Archive, Upload, X, Download } from 'lucide-react';
+import { LayoutDashboard, Table, LineChart, PieChart, Settings, LogOut, ArrowLeft, Layers, TrendingUp, BarChart3, Archive, Upload, X, Download, Activity } from 'lucide-react';
 import { useToast } from './components/Toast';
 import FileUpload from './components/FileUpload';
 import SummaryCards from './components/SummaryCards';
@@ -10,6 +10,7 @@ import PnLTable from './components/PnLTable';
 import SummaryDashboard from './components/SummaryDashboard';
 import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { parseExcelFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, generateId, calculatePortfolioAnalysis } from './services/excelService';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData } from './types';
 
@@ -72,9 +73,26 @@ const App: React.FC = () => {
       return optionTransactions.reduce((sum, t) => sum + (t.total || 0), 0);
   }, [optionTransactions]);
 
-  const [activeTab, setActiveTab] = useState<'summary' | 'lookup' | 'transactions' | 'pnl' | 'history' | 'nav'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'analytics' | 'lookup' | 'transactions' | 'pnl' | 'history' | 'nav'>('summary');
+
+  const [benchmarkNav, setBenchmarkNav] = useState<{date: string, value: number}[]>(() => {
+    const s = localStorage.getItem('trade_tracker_benchmark_nav');
+    return s ? JSON.parse(s) : [];
+  });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => localStorage.setItem('trade_tracker_benchmark_nav', JSON.stringify(benchmarkNav)), [benchmarkNav]);
+
+  const handleBenchmarkUpload = useCallback((csv: string) => {
+    if (!csv) { setBenchmarkNav([]); return; }
+    const lines = csv.trim().split('\n').slice(1);
+    const parsed = lines.map(l => {
+      const [date, val] = l.split(',');
+      return { date: date?.trim(), value: parseFloat(val?.trim()) };
+    }).filter(r => r.date && !isNaN(r.value));
+    setBenchmarkNav(parsed);
+  }, []);
 
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(marketConstants)), [marketConstants]);
   useEffect(() => { if (lookupData) localStorage.setItem(LOOKUP_DATA_KEY, JSON.stringify(lookupData)); }, [lookupData]);
@@ -483,10 +501,11 @@ const App: React.FC = () => {
         </div>
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
           <button onClick={() => setActiveTab('summary')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'summary' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><BarChart3 size={20} /><span className="font-medium text-sm">Summary</span></button>
-          <button onClick={() => setActiveTab('lookup')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'lookup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Table size={20} /><span className="font-medium text-sm">Lookup Data</span></button>
-          <button onClick={() => setActiveTab('transactions')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'transactions' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Layers size={20} /><span className="font-medium text-sm">Holdings</span></button>
-          <button onClick={() => setActiveTab('pnl')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'pnl' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><LineChart size={20} /><span className="font-medium text-sm">Realized P&L</span></button>
+          <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'analytics' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Activity size={20} /><span className="font-medium text-sm">Analytics</span></button>
           <button onClick={() => setActiveTab('nav')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'nav' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><TrendingUp size={20} /><span className="font-medium text-sm">Daily NAV</span></button>
+          <button onClick={() => setActiveTab('pnl')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'pnl' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><LineChart size={20} /><span className="font-medium text-sm">Realized P&L</span></button>
+          <button onClick={() => setActiveTab('transactions')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'transactions' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Layers size={20} /><span className="font-medium text-sm">Holdings</span></button>
+          <button onClick={() => setActiveTab('lookup')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'lookup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Table size={20} /><span className="font-medium text-sm">Lookup Data</span></button>
           <button onClick={() => setActiveTab('history')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'history' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Archive size={20} /><span className="font-medium text-sm">History</span></button>
           
           <div className="pt-6 space-y-2 border-t border-slate-800/50 mt-4">
@@ -512,6 +531,19 @@ const App: React.FC = () => {
                 cashPosition={cashPosition} 
                 onUpdateCash={setCashPosition}
                 optionPosition={optionPosition}
+              />
+            )}
+            {activeTab === 'analytics' && (
+              <AnalyticsDashboard
+                pnlData={pnlData}
+                transactions={transactions}
+                lookupData={lookupData}
+                marketConstants={marketConstants}
+                navData={navData}
+                cashPosition={cashPosition}
+                optionPosition={optionPosition}
+                benchmarkNav={benchmarkNav}
+                onBenchmarkUpload={handleBenchmarkUpload}
               />
             )}
             {activeTab === 'lookup' && (
