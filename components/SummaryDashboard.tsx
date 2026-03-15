@@ -1,9 +1,8 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { PnLData, MarketConstants, TransactionData, LookupSheetData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
-import { Target, Activity, PieChart, DollarSign, BarChart3, Table as TableIcon, Calculator, Filter, Calendar } from 'lucide-react';
-import { calculatePortfolioAnalysis } from '../services/excelService';
-import AnalysisTable from './AnalysisTable';
+import { BarChart3, Table as TableIcon, Calculator, Filter, Archive } from 'lucide-react';
+
 
 interface SummaryDashboardProps {
   pnlData: PnLData[];
@@ -16,24 +15,6 @@ interface SummaryDashboardProps {
 }
 
 const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition }) => {
-
-  // Date Range State
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
-
-  // Initialize Date Range from Data
-  useEffect(() => {
-    if (pnlData.length > 0 && !startDate) {
-        const dates = pnlData.map(d => d.sellDate).filter(d => d).sort();
-        if (dates.length > 0) {
-            setStartDate(dates[0]);
-        } else {
-            setStartDate('2020-01-01');
-        }
-    } else if (!startDate) {
-        setStartDate('2020-01-01');
-    }
-  }, [pnlData]);
 
   // Filters and Selection for Holdings Analysis
   const [filterType, setFilterType] = useState('All');
@@ -61,72 +42,15 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     document.addEventListener('mouseup', handleUp);
   };
 
-  const { metrics, group1, group2, holdingsSummary, rawDetailedHoldings } = useMemo(() => {
-    // Filter PnL Data by Date Range
-    const filteredPnlData = pnlData.filter(p => p.sellDate >= startDate && p.sellDate <= endDate);
-
-    // 1. Calculate Portfolio Analysis using shared service for consistent P&L and Group 1 data
-    const analysis = calculatePortfolioAnalysis(filteredPnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition);
-
-    // 2. Win/Loss Statistics & Realized PnL Map for Group 2 lookup
+  const { totalPortfolioMv, group2, holdingsSummary, rawDetailedHoldings } = useMemo(() => {
+    // 1. Realized PnL Map for Group 2 lookup (use full pnlData for current holdings)
     const realizedPnlMap = new Map<string, number>();
-    
-    // Detailed Win/Loss Calculation (Converted to USD)
-    let totalWinUsd = 0;
-    let totalLossUsd = 0;
-    let winCount = 0;
-    let lossCount = 0;
-    const winValues: number[] = [];
-    const lossValues: number[] = [];
-
-    filteredPnlData.forEach(p => {
+    pnlData.forEach(p => {
         const s = p.stock.toUpperCase().trim();
         realizedPnlMap.set(s, (realizedPnlMap.get(s) || 0) + p.realizedPnL);
-
-        // USD Conversion for Stats
-        const m = (p.market || 'US').toUpperCase();
-        let rate = 1;
-        if (m === 'HK') rate = marketConstants.exg_rate;
-        else if (m === 'SG') rate = marketConstants.sg_exg;
-        else if (['AUD', 'AUS'].includes(m)) rate = marketConstants.aud_exg;
-        
-        const pnlUsd = rate !== 0 ? p.realizedPnL / rate : 0;
-
-        if (pnlUsd > 0) {
-            totalWinUsd += pnlUsd;
-            winCount++;
-            winValues.push(pnlUsd);
-        } else if (pnlUsd < 0) {
-            totalLossUsd += pnlUsd;
-            lossCount++;
-            lossValues.push(pnlUsd);
-        }
     });
 
-    const totalTrades = winCount + lossCount;
-    const localTotalPnlUsd = totalWinUsd + totalLossUsd;
-
-    // Median Calculation
-    const calculateMedian = (values: number[]) => {
-        if (values.length === 0) return 0;
-        values.sort((a, b) => a - b);
-        const half = Math.floor(values.length / 2);
-        if (values.length % 2) return values[half];
-        return (values[half - 1] + values[half]) / 2.0;
-    };
-
-    const medianWin = calculateMedian(winValues);
-    const medianLoss = calculateMedian(lossValues);
-
-    const winnersLosers = Array.from(new Set(filteredPnlData.map(p => p.stock.toUpperCase()))).map(stock => {
-      const stockTrades = filteredPnlData.filter(p => p.stock.toUpperCase() === stock);
-      const totalStockPnl = stockTrades.reduce((acc, p) => acc + p.realizedPnL, 0);
-      const mkt = stockTrades[0]?.market || 'US';
-      const rate = mkt.toUpperCase() === 'HK' ? marketConstants.exg_rate : (mkt.toUpperCase() === 'SG' ? marketConstants.sg_exg : (['AUD', 'AUS'].includes(mkt.toUpperCase()) ? marketConstants.aud_exg : 1));
-      return { stock, pnl: totalStockPnl / rate };
-    }).sort((a, b) => b.pnl - a.pnl);
-
-    // 3. Group 2 (Current Holdings) Calculation with Cost Basis
+    // 2. Group 2 (Current Holdings) Calculation with Cost Basis
     const holdingMap = new Map<string, { shares: number; totalCostLocal: number; market: string; isCCS: boolean; totalCashFlowLocal: number; name: string }>();
     const sortedTxns = [...transactions].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
@@ -264,7 +188,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         aus: ausHoldings.reduce((acc, curr) => acc + curr.lastMv, 0),
     };
 
-    // 4. Detailed Holdings Analysis (Fundamental Data)
+    // 3. Detailed Holdings Analysis (Fundamental Data)
     let detailedHoldings = g2Final.map(h => {
         const l = lookupData?.stocks.find(s => s.ticker.toUpperCase() === h.stock.toUpperCase());
         return {
@@ -289,30 +213,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     });
 
     return {
-      metrics: {
-        totalPnlUsd: localTotalPnlUsd,
-        totalTrades,
-        winRate: totalTrades > 0 ? (winCount / totalTrades) * 100 : 0,
-        profitFactor: Math.abs(totalLossUsd) > 0 ? totalWinUsd / Math.abs(totalLossUsd) : (totalWinUsd > 0 ? Infinity : 0),
-        avgPnl: totalTrades > 0 ? localTotalPnlUsd / totalTrades : 0,
-        totalPortfolioMv: grandTotalPortfolio,
-        allWinners: winnersLosers.filter(s => s.pnl > 0),
-        allLosers: winnersLosers.slice().reverse().filter(s => s.pnl < 0),
-        
-        // Detailed Win/Loss
-        winCount,
-        lossCount,
-        totalWinUsd,
-        totalLossUsd,
-        avgWin: winCount > 0 ? totalWinUsd / winCount : 0,
-        avgLoss: lossCount > 0 ? totalLossUsd / lossCount : 0,
-        medianWin,
-        medianLoss
-      },
-      group1: {
-        hk: analysis.g1Hk,
-        nonHk: analysis.g1NonHk
-      },
+      totalPortfolioMv: grandTotalPortfolio,
       group2: {
         hk: hkHoldings,
         ccs: ccsHoldings,
@@ -322,7 +223,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       holdingsSummary,
       rawDetailedHoldings: detailedHoldings
     };
-  }, [pnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition, startDate, endDate]);
+  }, [pnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition]);
 
   // Second Memo: Filtering and Weighted Average Calculation
   const { filteredHoldings, weightedAvgs } = useMemo(() => {
@@ -358,12 +259,12 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           roe: weightedRoe,
           ps: totalMvForAvg ? calculationHoldings.reduce((sum, h) => sum + (h.ps * h.lastMv), 0) / totalMvForAvg : 0,
           holdingsUsd: totalMvForAvg,
-          holdingsPct: metrics.totalPortfolioMv ? (totalMvForAvg / metrics.totalPortfolioMv) * 100 : 0,
+          holdingsPct: totalPortfolioMv ? (totalMvForAvg / totalPortfolioMv) * 100 : 0,
           count: calculationHoldings.length
       };
 
       return { filteredHoldings: filtered, weightedAvgs: avgs };
-  }, [rawDetailedHoldings, filterType, filterCategory, filterClass, excludedTickers, marketConstants.date, metrics.totalPortfolioMv]);
+  }, [rawDetailedHoldings, filterType, filterCategory, filterClass, excludedTickers, marketConstants.date, totalPortfolioMv]);
 
   const toggleAllSelection = () => {
       // Logic: If all currently filtered items are included (not in excludedTickers), then exclude them all.
@@ -391,18 +292,22 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       setExcludedTickers(newExcluded);
   };
 
-  const MetricCard = ({ title, value, subValue, icon: Icon, colorClass }: any) => (
-    <div className="bg-white px-4 py-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4">
-      <div className={`p-3 rounded-xl ${colorClass.includes('red') ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-        <Icon className="w-6 h-6" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">{title}</p>
-        <h3 className={`text-xl font-black truncate leading-tight ${colorClass}`}>{value}</h3>
-        {subValue && <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{subValue}</p>}
-      </div>
-    </div>
-  );
+  // Position age — first buy date per stock
+  const currentHoldings = useMemo(() => {
+    const map = new Map<string, string>();
+    transactions
+      .filter(t => t.action?.toLowerCase().includes('buy'))
+      .forEach(t => {
+        const key = t.stock.toUpperCase();
+        if (!map.has(key) || t.date < map.get(key)!) map.set(key, t.date);
+      });
+    return map;
+  }, [transactions]);
+
+  const daysSince = (dateStr: string) => {
+    if (!dateStr) return '-';
+    return `${Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)}d`;
+  };
 
   const formatPrice = (val: number) => {
       if (isNaN(val)) return '0.00';
@@ -460,11 +365,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           </div>
                           <div className="text-right flex items-baseline gap-2">
                               <span className="text-base font-black text-slate-700">${Math.round(holdingsSummary.ccs).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.ccs, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.ccs, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-purple-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.ccs, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-purple-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.ccs, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
 
@@ -477,11 +382,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           </div>
                           <div className="text-right flex items-baseline gap-2">
                               <span className="text-base font-black text-slate-700">${Math.round(holdingsSummary.us).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.us, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.us, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.us, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.us, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
 
@@ -494,11 +399,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           </div>
                           <div className="text-right flex items-baseline gap-2">
                               <span className="text-base font-black text-slate-700">${Math.round(holdingsSummary.aus).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.aus, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.aus, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.aus, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.aus, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
 
@@ -511,11 +416,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           </div>
                           <div className="text-right flex items-baseline gap-2">
                               <span className="text-base font-black text-slate-700">${Math.round(holdingsSummary.hk).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.hk, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(holdingsSummary.hk, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.hk, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(holdingsSummary.hk, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
 
@@ -528,11 +433,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           </div>
                           <div className="text-right flex items-center gap-2">
                               <span className="text-base font-black text-orange-600">${Math.round(optionPosition).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(optionPosition, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(optionPosition, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-orange-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(optionPosition, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-orange-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(optionPosition, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
 
@@ -553,11 +458,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                                   onChange={(e) => onUpdateCash(parseFloat(e.target.value) || 0)}
                                 />
                               </div>
-                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(cashPosition, metrics.totalPortfolioMv)}%</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-9 text-right">{getPct(cashPosition, totalPortfolioMv)}%</span>
                           </div>
                       </div>
                       <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div className="bg-emerald-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(cashPosition, metrics.totalPortfolioMv)}%` }}></div>
+                        <div className="bg-emerald-500 h-full rounded-full transition-all duration-1000" style={{ width: `${getPct(cashPosition, totalPortfolioMv)}%` }}></div>
                       </div>
                   </div>
               </div>
@@ -566,28 +471,12 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               <div className="bg-slate-50 p-6 border-t border-slate-200">
                   <div className="flex justify-between items-center">
                       <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Total Portfolio (USD)</span>
-                      <span className="text-3xl font-black text-slate-800 tracking-tight leading-none" title={metrics.totalPortfolioMv.toLocaleString()}>
-                        ${Math.round(metrics.totalPortfolioMv).toLocaleString()}
+                      <span className="text-3xl font-black text-slate-800 tracking-tight leading-none" title={totalPortfolioMv.toLocaleString()}>
+                        ${Math.round(totalPortfolioMv).toLocaleString()}
                       </span>
                   </div>
               </div>
            </div>
-        </div>
-
-        <div className="flex justify-end mb-4">
-             <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase flex items-center gap-1 px-2"><Calendar size={14} /> Stats Period:</span>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50"/>
-                  <span className="text-slate-300 font-bold">-</span>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50"/>
-             </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-          <MetricCard title="Net Realized P&L" value={`$${Math.abs(metrics.totalPnlUsd).toLocaleString()}`} icon={DollarSign} colorClass={metrics.totalPnlUsd >= 0 ? 'text-red-500' : 'text-emerald-500'} />
-          <MetricCard title="Win Rate" value={`${metrics.winRate.toFixed(1)}%`} subValue={`${metrics.totalTrades} Trades`} icon={Target} colorClass="text-blue-600" />
-          <MetricCard title="Profit Factor" value={metrics.profitFactor.toFixed(2)} icon={Activity} colorClass="text-blue-600" />
-          <MetricCard title="Avg P&L" value={`$${metrics.avgPnl.toFixed(2)}`} icon={PieChart} colorClass="text-purple-600" />
         </div>
 
       </section>
@@ -758,6 +647,75 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                 </div>
             </div>
         </div>
+      </section>
+
+      {/* Current Holdings Tables */}
+      <section className="mb-12 space-y-6">
+        <div className="mb-4">
+          <h2 className="text-xl font-black text-slate-800 uppercase flex items-center gap-2">
+            <Archive className="w-5 h-5 text-blue-600" /> Current Holdings
+          </h2>
+        </div>
+        {[
+          { title: 'HK Holdings', data: group2.hk, currency: 'HKD' },
+          { title: 'CCS Holdings', data: group2.ccs, currency: 'USD' },
+          { title: 'US Stocks', data: group2.us, currency: 'USD' },
+          { title: 'AUS Holdings', data: group2.aus, currency: 'AUD' },
+        ]
+          .filter(g => g.data && g.data.length > 0)
+          .map(({ title, data, currency }) => (
+            <div key={title} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-3 border-b border-slate-100 bg-blue-50/20 flex items-center justify-between">
+                <h3 className="font-black text-slate-800 text-xs uppercase tracking-tight flex items-center gap-2">
+                  <Archive size={14} className="text-blue-500" /> {title}
+                </h3>
+                <span className="text-[9px] font-black bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">{data.length} HOLDINGS</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="bg-slate-100/80">
+                    <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                      <th className="py-2 px-3">Stock</th>
+                      <th className="py-2 px-3">Name</th>
+                      <th className="py-2 px-3 text-right">Shares</th>
+                      <th className="py-2 px-3 text-right">Avg Cost ({currency})</th>
+                      <th className="py-2 px-3 text-right">Last Price ({currency})</th>
+                      <th className="py-2 px-3 text-right">MV (USD)</th>
+                      <th className="py-2 px-3 text-right">P&L (USD)</th>
+                      <th className="py-2 px-3 text-right">P&L %</th>
+                      <th className="py-2 px-3 text-right">MV %</th>
+                      <th className="py-2 px-3 text-right">Held Since</th>
+                      <th className="py-2 px-3 text-right">Days</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {data.map((h: any) => {
+                      const heldSince = currentHoldings.get(h.stock.toUpperCase()) || '';
+                      return (
+                        <tr key={h.stock} className="hover:bg-slate-50">
+                          <td className="py-1.5 px-3 font-black text-blue-600">{h.stock}</td>
+                          <td className="py-1.5 px-3 text-slate-500 text-[10px] max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap" title={h.name}>{h.name}</td>
+                          <td className="py-1.5 px-3 text-right font-mono">{h.shares?.toLocaleString()}</td>
+                          <td className="py-1.5 px-3 text-right font-mono">{formatPrice(h.avgCost)}</td>
+                          <td className="py-1.5 px-3 text-right font-mono font-black">{formatPrice(h.lastPrice)}</td>
+                          <td className="py-1.5 px-3 text-right font-mono">${h.lastMv?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                          <td className={`py-1.5 px-3 text-right font-mono font-bold ${h.pnl >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                            {h.pnl?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </td>
+                          <td className={`py-1.5 px-3 text-right font-mono font-bold ${h.pnlPct >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                            {h.pnlPct?.toFixed(2)}%
+                          </td>
+                          <td className="py-1.5 px-3 text-right font-mono text-slate-500">{h.mvPct?.toFixed(2)}%</td>
+                          <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{heldSince}</td>
+                          <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{daysSince(heldSince)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
       </section>
 
     </div>

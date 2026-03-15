@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   BarChart, Bar, LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,7 +8,7 @@ import {
 import {
   Info, TrendingUp, TrendingDown, Activity, BarChart3,
   PieChart as PieChartIcon, Target, Zap, Award, Clock,
-  Upload, X, ChevronDown, ChevronUp, Layers, Archive
+  Upload, X, ChevronDown, ChevronUp, Layers, Archive, Calendar
 } from 'lucide-react';
 import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData } from '../types';
 import { calculatePortfolioAnalysis } from '../services/excelService';
@@ -68,6 +68,16 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
   </div>
 );
 
+const DateRangePicker: React.FC<{ start: string; end: string; onStart: (v: string) => void; onEnd: (v: string) => void }> = ({ start, end, onStart, onEnd }) => (
+  <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm self-end">
+    <Calendar size={12} className="text-slate-400" />
+    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Period:</span>
+    <input type="date" value={start} onChange={e => onStart(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50" />
+    <span className="text-slate-300 font-bold text-xs">–</span>
+    <input type="date" value={end} onChange={e => onEnd(e.target.value)} className="text-xs font-bold border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50" />
+  </div>
+);
+
 const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   pnlData,
   transactions,
@@ -84,9 +94,50 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
 
+  // ── Per-tab date range state ──────────────────────────────────────────────────
+  const today = new Date().toISOString().split('T')[0];
+  const [pnlStart, setPnlStart] = useState('');
+  const [pnlEnd, setPnlEnd] = useState(today);
+  const [tradesStart, setTradesStart] = useState('');
+  const [tradesEnd, setTradesEnd] = useState(today);
+  const [stocksStart, setStocksStart] = useState('');
+  const [stocksEnd, setStocksEnd] = useState(today);
+  const [portfolioStart, setPortfolioStart] = useState('');
+  const [portfolioEnd, setPortfolioEnd] = useState(today);
+  const [benchmarkStart, setBenchmarkStart] = useState('');
+  const [benchmarkEnd, setBenchmarkEnd] = useState(today);
+
+  // Initialize start dates from earliest pnlData
+  useEffect(() => {
+    if (!pnlData.length) return;
+    const earliest = pnlData.map(p => p.sellDate).filter(Boolean).sort()[0] || '2020-01-01';
+    setPnlStart(s => s || earliest);
+    setTradesStart(s => s || earliest);
+    setStocksStart(s => s || earliest);
+    setPortfolioStart(s => s || earliest);
+    setBenchmarkStart(s => s || earliest);
+  }, [pnlData]);
+
+  // ── Per-tab filtered data ──────────────────────────────────────────────────────
+  const pnlFiltered = useMemo(() =>
+    pnlData.filter(p => p.sellDate && (!pnlStart || p.sellDate >= pnlStart) && p.sellDate <= pnlEnd),
+    [pnlData, pnlStart, pnlEnd]);
+
+  const tradesFiltered = useMemo(() =>
+    pnlData.filter(p => p.sellDate && (!tradesStart || p.sellDate >= tradesStart) && p.sellDate <= tradesEnd),
+    [pnlData, tradesStart, tradesEnd]);
+
+  const stocksFiltered = useMemo(() =>
+    pnlData.filter(p => p.sellDate && (!stocksStart || p.sellDate >= stocksStart) && p.sellDate <= stocksEnd),
+    [pnlData, stocksStart, stocksEnd]);
+
+  const portfolioFiltered = useMemo(() =>
+    pnlData.filter(p => p.sellDate && (!portfolioStart || p.sellDate >= portfolioStart) && p.sellDate <= portfolioEnd),
+    [pnlData, portfolioStart, portfolioEnd]);
+
   // ── pnlMetrics ──────────────────────────────────────────────────────────────
   const pnlMetrics = useMemo(() => {
-    const filtered = pnlData.filter(p => p.sellDate);
+    const filtered = pnlFiltered;
     const wins: number[] = [], losses: number[] = [];
     filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
@@ -122,12 +173,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       medianLoss: median(losses),
       totalTrades: filtered.length,
     };
-  }, [pnlData, marketConstants]);
+  }, [pnlFiltered, marketConstants]);
 
   // ── cumulativeData ───────────────────────────────────────────────────────────
   const cumulativeData = useMemo(() => {
-    const sorted = [...pnlData]
-      .filter(p => p.sellDate)
+    const sorted = [...pnlFiltered]
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let cum = 0, peak = 0;
     return sorted.map(p => {
@@ -143,12 +193,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         dailyPnl: Math.round(usd),
       };
     });
-  }, [pnlData, marketConstants]);
+  }, [pnlFiltered, marketConstants]);
 
   // ── monthlyHeatmap ───────────────────────────────────────────────────────────
   const monthlyHeatmap = useMemo(() => {
     const map = new Map<string, { total: number; count: number }>();
-    pnlData.forEach(p => {
+    pnlFiltered.forEach(p => {
       if (!p.sellDate) return;
       const key = p.sellDate.substring(0, 7);
       const rate = getRate(p.market || '', marketConstants);
@@ -156,8 +206,20 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       const cur = map.get(key) || { total: 0, count: 0 };
       map.set(key, { total: cur.total + usd, count: cur.count + 1 });
     });
-    return map;
-  }, [pnlData, marketConstants]);
+    // Compute annual totals for % contribution per month
+    const annualTotals = new Map<string, number>();
+    map.forEach((v, k) => {
+      const yr = k.substring(0, 4);
+      annualTotals.set(yr, (annualTotals.get(yr) || 0) + v.total);
+    });
+    const result = new Map<string, { total: number; count: number; pct: number }>();
+    map.forEach((v, k) => {
+      const yr = k.substring(0, 4);
+      const yrTotal = annualTotals.get(yr) || 0;
+      result.set(k, { ...v, pct: yrTotal !== 0 ? (v.total / Math.abs(yrTotal)) * 100 : 0 });
+    });
+    return result;
+  }, [pnlFiltered, marketConstants]);
 
   // ── returnBuckets ────────────────────────────────────────────────────────────
   const returnBuckets = useMemo(() => {
@@ -171,13 +233,13 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { range: '20 to 50%', min: 20, max: 50, count: 0 },
       { range: '>50%', min: 50, max: Infinity, count: 0 },
     ];
-    pnlData.forEach(p => {
+    tradesFiltered.forEach(p => {
       const r = p.returnPercent || 0;
       const b = buckets.find(b => r >= b.min && r < b.max) || buckets[buckets.length - 1];
       b.count++;
     });
     return buckets;
-  }, [pnlData]);
+  }, [tradesFiltered]);
 
   // ── pnlByDimension ───────────────────────────────────────────────────────────
   const pnlByDimension = useMemo(() => {
@@ -192,7 +254,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const byType = new Map<string, number>(),
       byCategory = new Map<string, number>(),
       byClass = new Map<string, number>();
-    pnlData.forEach(p => {
+    tradesFiltered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
       const info = stockMap.get(p.stock.toUpperCase()) || { type: 'Other', category: 'Other', class: 'Other' };
@@ -205,12 +267,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         .map(([name, value]) => ({ name, value: Math.round(value) }))
         .sort((a, b) => b.value - a.value);
     return { byType: toArr(byType), byCategory: toArr(byCategory), byClass: toArr(byClass) };
-  }, [pnlData, lookupData, marketConstants]);
+  }, [tradesFiltered, lookupData, marketConstants]);
 
   // ── streakData ───────────────────────────────────────────────────────────────
   const streakData = useMemo(() => {
-    const sorted = [...pnlData]
-      .filter(p => p.sellDate)
+    const sorted = [...tradesFiltered]
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let curStreak = 0, maxWin = 0, maxLoss = 0;
     const data = sorted.map(p => {
@@ -227,12 +288,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       return { date: p.sellDate.substring(0, 7), pnl: Math.round(Math.abs(usd)), isWin, streak: curStreak };
     });
     return { data, currentStreak: curStreak, maxWin, maxLoss };
-  }, [pnlData, marketConstants]);
+  }, [tradesFiltered, marketConstants]);
 
   // ── holdingOutcome ───────────────────────────────────────────────────────────
   const holdingOutcome = useMemo(() => {
-    const wins = pnlData.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL > 0).map(p => p.holdingDays || 0);
-    const losses = pnlData.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL <= 0).map(p => p.holdingDays || 0);
+    const wins = tradesFiltered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL > 0).map(p => p.holdingDays || 0);
+    const losses = tradesFiltered.filter(p => (p.holdingDays || 0) > 0 && p.realizedPnL <= 0).map(p => p.holdingDays || 0);
     const avg = (arr: number[]) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0);
     const med = (arr: number[]) => {
       if (!arr.length) return 0;
@@ -244,7 +305,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { category: 'Winning Trades', avg: avg(wins), median: med(wins) },
       { category: 'Losing Trades', avg: avg(losses), median: med(losses) },
     ];
-  }, [pnlData]);
+  }, [tradesFiltered]);
 
   // ── holdingDistribution ──────────────────────────────────────────────────────
   const holdingDistribution = useMemo(() => {
@@ -256,7 +317,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       { range: '6-12mo', count: 0 },
       { range: '>1yr', count: 0 },
     ];
-    pnlData.forEach(p => {
+    portfolioFiltered.forEach(p => {
       const d = p.holdingDays || 0;
       if (d <= 7) buckets[0].count++;
       else if (d <= 30) buckets[1].count++;
@@ -266,12 +327,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       else buckets[5].count++;
     });
     return buckets;
-  }, [pnlData]);
+  }, [portfolioFiltered]);
 
   // ── stockStats ───────────────────────────────────────────────────────────────
   const stockStats = useMemo(() => {
     const stats = new Map<string, { count: number; wins: number; totalPnl: number }>();
-    pnlData.forEach(p => {
+    stocksFiltered.forEach(p => {
       const key = p.stock.toUpperCase();
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
@@ -293,13 +354,13 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 20);
-  }, [pnlData, marketConstants]);
+  }, [stocksFiltered, marketConstants]);
 
   // ── expectancyMetrics ────────────────────────────────────────────────────────
   const expectancyMetrics = useMemo(() => {
-    const wins = pnlData.filter(p => p.realizedPnL > 0);
-    const losses = pnlData.filter(p => p.realizedPnL <= 0);
-    const total = pnlData.length;
+    const wins = portfolioFiltered.filter(p => p.realizedPnL > 0);
+    const losses = portfolioFiltered.filter(p => p.realizedPnL <= 0);
+    const total = portfolioFiltered.length;
     if (total === 0)
       return { winRate: 0, lossRate: 0, avgWin: 0, avgLoss: 0, expectancy: 0, kelly: 0, halfKelly: 0 };
     const getUsd = (p: PnLData) => p.realizedPnL / getRate(p.market || '', marketConstants);
@@ -310,12 +371,12 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const expectancy = winRate * avgWin - lossRate * avgLoss;
     const kelly = avgLoss > 0 ? (winRate - lossRate / (avgWin / avgLoss)) * 100 : 0;
     return { winRate: winRate * 100, lossRate: lossRate * 100, avgWin, avgLoss, expectancy, kelly, halfKelly: kelly / 2 };
-  }, [pnlData, marketConstants]);
+  }, [portfolioFiltered, marketConstants]);
 
   // ── topWinnersLosers ─────────────────────────────────────────────────────────
   const topWinnersLosers = useMemo(() => {
     const byStock = new Map<string, { stock: string; pnl: number }>();
-    pnlData.forEach(p => {
+    pnlFiltered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants);
       const usd = p.realizedPnL / rate;
       const cur = byStock.get(p.stock) || { stock: p.stock, pnl: 0 };
@@ -324,7 +385,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     });
     const arr = Array.from(byStock.values()).sort((a, b) => b.pnl - a.pnl);
     return { winners: arr.filter(x => x.pnl > 0), losers: arr.filter(x => x.pnl < 0).reverse() };
-  }, [pnlData, marketConstants]);
+  }, [pnlFiltered, marketConstants]);
 
   // ── currentHoldings (position age) ───────────────────────────────────────────
   const currentHoldings = useMemo(() => {
@@ -464,25 +525,39 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ P&L TAB ══════════════════════════════════ */}
         {activeTab === 'pnl' && (
           <>
+            <DateRangePicker start={pnlStart} end={pnlEnd} onStart={setPnlStart} onEnd={setPnlEnd} />
+
             {/* 4 top metric cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Net Realized P&L</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Realized P&L</p>
+                  <InfoTooltip text="Total realized profit/loss from all closed trades, converted to USD." />
+                </div>
                 <p className={`text-xl font-black ${pnlMetrics.totalPnl >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                   ${Math.abs(pnlMetrics.totalPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Win Rate</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Win Rate</p>
+                  <InfoTooltip text="% of trades that closed profitably. e.g. 70% means 7 out of 10 trades were winners." />
+                </div>
                 <p className="text-xl font-black text-blue-600">{pnlMetrics.winRate.toFixed(1)}%</p>
                 <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{pnlMetrics.totalTrades} Trades</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Profit Factor</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Profit Factor</p>
+                  <InfoTooltip text="Total profit ÷ total loss (absolute). Above 1.5 is solid; above 2.0 is excellent." />
+                </div>
                 <p className="text-xl font-black text-blue-600">{pnlMetrics.profitFactor.toFixed(2)}</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Avg P&L / Trade</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Avg P&L / Trade</p>
+                  <InfoTooltip text="Average profit or loss per trade (Net P&L ÷ total trades). Positive = net edge per trade." />
+                </div>
                 <p className={`text-xl font-black ${(pnlMetrics.totalPnl / Math.max(pnlMetrics.totalTrades, 1)) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                   ${(pnlMetrics.totalPnl / Math.max(pnlMetrics.totalTrades, 1)).toFixed(2)}
                 </p>
@@ -492,29 +567,47 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             {/* 6 detail cards */}
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Win (Profit)</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Win (Profit)</p>
+                  <InfoTooltip text="Sum of all profitable closed trades in USD." />
+                </div>
                 <p className="text-xl font-black text-red-500">{fmtUsd(pnlMetrics.totalWin)}</p>
                 <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{pnlMetrics.wins.length} Trades</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Avg Profit</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Avg Profit</p>
+                  <InfoTooltip text="Average P&L of winning trades (Total Win ÷ Win Count)." />
+                </div>
                 <p className="text-xl font-black text-red-500">{fmtUsd(pnlMetrics.avgWin)}</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Median Profit</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Median Profit</p>
+                  <InfoTooltip text="Middle value of winning trades' P&L. Less skewed by outliers than the average." />
+                </div>
                 <p className="text-xl font-black text-red-500">{fmtUsd(pnlMetrics.medianWin)}</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Loss</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Loss</p>
+                  <InfoTooltip text="Sum of all losing closed trades in USD (shown as positive)." />
+                </div>
                 <p className="text-xl font-black text-emerald-500">{fmtUsd(pnlMetrics.totalLoss)}</p>
                 <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{pnlMetrics.losses.length} Trades</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Avg Loss</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Avg Loss</p>
+                  <InfoTooltip text="Average magnitude of losing trades (Total Loss ÷ Loss Count)." />
+                </div>
                 <p className="text-xl font-black text-emerald-500">{fmtUsd(pnlMetrics.avgLoss)}</p>
               </Card>
               <Card>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Median Loss</p>
+                <div className="flex items-center mb-1">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Median Loss</p>
+                  <InfoTooltip text="Middle value of losing trades' magnitude. More robust than average to outlier losses." />
+                </div>
                 <p className="text-xl font-black text-emerald-500">{fmtUsd(pnlMetrics.medianLoss)}</p>
               </Card>
             </div>
@@ -669,13 +762,18 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             <div
                               key={mi}
                               title={data ? `${key}: $${Math.round(val).toLocaleString()} (${data.count} trades)` : key}
-                              className="h-8 rounded cursor-default flex items-center justify-center text-[9px] font-bold"
+                              className="h-10 rounded cursor-default flex flex-col items-center justify-center text-[9px] font-bold leading-tight"
                               style={{
                                 backgroundColor: heatColor(val),
                                 color: Math.abs(val) / maxAbsHeat > 0.5 ? 'white' : '#374151',
                               }}
                             >
-                              {data ? `${val > 0 ? '+' : ''}${Math.round(val / 1000)}k` : ''}
+                              {data ? (
+                                <>
+                                  <span>{val > 0 ? '+' : ''}{Math.round(val / 1000)}k</span>
+                                  <span className="text-[7px] opacity-80">{data.pct > 0 ? '+' : ''}{data.pct.toFixed(0)}%</span>
+                                </>
+                              ) : ''}
                             </div>
                           );
                         })}
@@ -691,6 +789,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ TRADES TAB ══════════════════════════════════ */}
         {activeTab === 'trades' && (
           <>
+            <DateRangePicker start={tradesStart} end={tradesEnd} onStart={setTradesStart} onEnd={setTradesEnd} />
             {/* B1: Return Distribution */}
             <Card>
               <SectionHeader
@@ -805,6 +904,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
         {/* ══════════════════════════════════ STOCKS TAB ══════════════════════════════════ */}
         {activeTab === 'stocks' && (
+          <>
+            <DateRangePicker start={stocksStart} end={stocksEnd} onStart={setStocksStart} onEnd={setStocksEnd} />
           <Card>
             <SectionHeader
               title="Stock Frequency & Performance"
@@ -884,74 +985,13 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </table>
             </div>
           </Card>
+          </>
         )}
 
         {/* ══════════════════════════════════ PORTFOLIO TAB ══════════════════════════════════ */}
         {activeTab === 'portfolio' && (
           <>
-            {/* D1: Current Holdings Tables */}
-            {[
-              { title: 'HK Holdings', data: portfolioAnalysis.g2Hk || [], currency: 'HKD' },
-              { title: 'CCS Holdings', data: portfolioAnalysis.g2Ccs || [], currency: 'USD' },
-              { title: 'US Stocks', data: (portfolioAnalysis.g2Us || []).filter((h: any) => !['AUD','AUS'].includes((h.market||'').toUpperCase())), currency: 'USD' },
-              { title: 'AUS Holdings', data: (portfolioAnalysis.g2Us || []).filter((h: any) => ['AUD','AUS'].includes((h.market||'').toUpperCase())), currency: 'AUD' },
-            ]
-              .filter(g => g.data && g.data.length > 0)
-              .map(({ title, data, currency }) => (
-                <Card key={title} className="!p-0 overflow-hidden">
-                  <div className="p-3 border-b border-slate-100 bg-blue-50/20 flex items-center justify-between">
-                    <h3 className="font-black text-slate-800 text-xs uppercase tracking-tight flex items-center gap-2">
-                      <Archive size={14} className="text-blue-500" /> {title}
-                    </h3>
-                    <span className="text-[9px] font-black bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">{data.length} HOLDINGS</span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-[11px]">
-                      <thead className="bg-slate-100/80">
-                        <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                          <th className="py-2 px-3">Stock</th>
-                          <th className="py-2 px-3">Name</th>
-                          <th className="py-2 px-3 text-right">Shares</th>
-                          <th className="py-2 px-3 text-right">Avg Cost ({currency})</th>
-                          <th className="py-2 px-3 text-right">Last Price ({currency})</th>
-                          <th className="py-2 px-3 text-right">MV (USD)</th>
-                          <th className="py-2 px-3 text-right">P&L (USD)</th>
-                          <th className="py-2 px-3 text-right">P&L %</th>
-                          <th className="py-2 px-3 text-right">MV %</th>
-                          <th className="py-2 px-3 text-right">Held Since</th>
-                          <th className="py-2 px-3 text-right">Days</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {data.map((h: any) => {
-                          const ticker = (h.Stock || '').toUpperCase();
-                          const heldSince = currentHoldings.get(ticker) || '';
-                          const companyName = lookupData?.stocks.find(s => s.ticker.toUpperCase() === ticker)?.companyName || '';
-                          return (
-                            <tr key={h.Stock} className="hover:bg-slate-50">
-                              <td className="py-1.5 px-3 font-black text-blue-600">{h.Stock}</td>
-                              <td className="py-1.5 px-3 text-slate-500 text-[10px] max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap" title={companyName}>{companyName}</td>
-                              <td className="py-1.5 px-3 text-right font-mono">{h.Shares?.toLocaleString()}</td>
-                              <td className="py-1.5 px-3 text-right font-mono">{h.AvgCost?.toFixed(2)}</td>
-                              <td className="py-1.5 px-3 text-right font-mono font-black">{h.LastPrice?.toFixed(2)}</td>
-                              <td className="py-1.5 px-3 text-right font-mono">${h.LastMV?.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                              <td className={`py-1.5 px-3 text-right font-mono font-bold ${(h.PnL || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                {h.PnL?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                              </td>
-                              <td className={`py-1.5 px-3 text-right font-mono font-bold ${(h.PnLPct || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                {((h.PnLPct || 0) * 100).toFixed(2)}%
-                              </td>
-                              <td className="py-1.5 px-3 text-right font-mono text-slate-500">{((h.MVPct || 0) * 100).toFixed(2)}%</td>
-                              <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{heldSince}</td>
-                              <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{daysSince(heldSince)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
-              ))}
+            <DateRangePicker start={portfolioStart} end={portfolioEnd} onStart={setPortfolioStart} onEnd={setPortfolioEnd} />
 
             {/* D2: Concentration Risk Treemap */}
             {group2Data.length > 0 && (
@@ -1177,6 +1217,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         {/* ══════════════════════════════════ BENCHMARK TAB ══════════════════════════════════ */}
         {activeTab === 'benchmark' && (
           <>
+            <DateRangePicker start={benchmarkStart} end={benchmarkEnd} onStart={setBenchmarkStart} onEnd={setBenchmarkEnd} />
             {benchmarkNav.length === 0 ? (
               <Card>
                 <div className="text-center py-20">
