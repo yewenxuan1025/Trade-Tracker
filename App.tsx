@@ -159,22 +159,63 @@ const App: React.FC = () => {
       if (result.interest.length > 0) setInterestData(result.interest);
       if (result.cashLedger.length > 0) {
         setCashLedger(result.cashLedger);
-        // Derive cashPosition from ledger, converting all amounts to USD using current exchange rates.
-        // Bug fix: previously non-USD amounts (AUD, HKD, SGD) were not converted, causing large errors.
-        // We include Deposit, Withdrawal, and Fee entries; exclude Transfer (inter-account moves that
-        // appear on both the sending and receiving side) and FX Conversion (just a currency change).
-        const mc = marketConstants; // capture current rates
-        const toUsd = (amount: number, currency: string) => {
+      }
+      // Comprehensive cash balance calculation:
+      //   Cash = NetLedger + RealizedP&L + Dividends + Interest + OpenPositionCosts
+      //
+      // Cash Ledger: include all types EXCEPT "FX Conversion" (which is a zero-sum currency swap).
+      //   NOTE: "Transfer" IS included — inter-account ACATS transfers appear as "Withdrawal" in IB
+      //   and "Transfer" in IB AUS; excluding Transfer would cause a large negative bias.
+      //
+      // All amounts converted to USD using current exchange rates.
+      {
+        const mc = marketConstants;
+        const toUsdByCurrency = (amount: number, currency: string) => {
           const c = (currency || 'USD').toUpperCase();
           if (c === 'HKD') return amount / mc.exg_rate;
           if (c === 'AUD') return amount / mc.aud_exg;
           if (c === 'SGD') return amount / mc.sg_exg;
           return amount;
         };
-        const netCash = result.cashLedger
-          .filter(e => ['deposit', 'withdrawal', 'fee'].includes(e.type.toLowerCase()))
-          .reduce((s, e) => s + toUsd(e.amount, e.currency), 0);
-        if (netCash !== 0) setCashPosition(parseFloat(netCash.toFixed(2)));
+        const toUsdByMarket = (amount: number, market: string) => {
+          const m = (market || '').toUpperCase().trim();
+          if (m === 'HK') return amount / mc.exg_rate;
+          if (m === 'AUS') return amount / mc.aud_exg;
+          if (m === 'SG') return amount / mc.sg_exg;
+          return amount;
+        };
+
+        // Use fresh result data; fall back to current state if file had no data for that sheet
+        const ledger   = result.cashLedger.length > 0  ? result.cashLedger  : cashLedger;
+        const pnl      = result.pnl.length > 0          ? result.pnl         : pnlData;
+        const divs     = result.dividends.length > 0    ? result.dividends   : dividendData;
+        const ints     = result.interest.length > 0     ? result.interest    : interestData;
+        const txns     = enrichTransactions(result.transactions, result.lookup);
+        const optTxns  = result.optionTransactions;
+
+        // 1. External cash flows (exclude FX Conversion — just a currency swap, should net to 0)
+        const EXCLUDED_LEDGER_TYPES = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
+        const netLedger = ledger
+          .filter(e => !EXCLUDED_LEDGER_TYPES.has(e.type.toLowerCase().replace(/[-\s]+/g, '')))
+          .reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
+
+        // 2. Realized P&L from closed trades (native currency per market)
+        const realizedPnl = pnl.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || ''), 0);
+
+        // 3. Dividends received
+        const dividends = divs.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
+
+        // 4. Interest received
+        const interest = ints.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
+
+        // 5. Cost of open stock positions (total is negative for buys)
+        const openStockCost = txns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+
+        // 6. Cost of open option positions
+        const openOptionCost = optTxns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+
+        const newCash = netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost;
+        setCashPosition(parseFloat(newCash.toFixed(2)));
       }
       setIsUploading(false);
       if (result.warnings.length > 0) {
