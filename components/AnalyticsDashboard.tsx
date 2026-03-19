@@ -11,7 +11,7 @@ import {
   PieChart as PieChartIcon, Target, Zap, Award, Clock,
   Upload, X, ChevronDown, ChevronUp, Layers, Archive, Calendar, Download
 } from 'lucide-react';
-import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData } from '../types';
+import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from '../types';
 import { calculatePortfolioAnalysis } from '../services/excelService';
 
 interface AnalyticsDashboardProps {
@@ -22,8 +22,12 @@ interface AnalyticsDashboardProps {
   navData: NavData[];
   cashPosition: number;
   optionPosition: number;
-  benchmarkNav: { date: string; value: number }[];
-  onBenchmarkUpload: (csv: string) => void;
+  benchmarkData: BenchmarkData;
+  onBenchmarkUpload: (file: File) => void;
+  onBenchmarkClear: () => void;
+  dividendData: DividendData[];
+  interestData: InterestData[];
+  cashLedger: CashLedgerEntry[];
 }
 
 const CHART_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#84cc16', '#f97316'];
@@ -98,14 +102,36 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   navData,
   cashPosition,
   optionPosition,
-  benchmarkNav,
+  benchmarkData,
   onBenchmarkUpload,
+  onBenchmarkClear,
+  dividendData,
+  interestData,
+  cashLedger,
 }) => {
-  const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark'>('pnl');
+  const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark' | 'income'>('pnl');
   const [concentrationThreshold, setConcentrationThreshold] = useState(10);
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
   const [heatFreq, setHeatFreq] = useState<HeatFreq>('monthly');
+
+  // ── Benchmark blend state ─────────────────────────────────────────────────
+  // Derive available index keys from benchmarkData columns
+  const availableIndices = useMemo(() => {
+    if (!benchmarkData.length) return [];
+    return Object.keys(benchmarkData[0]).filter(k => k !== 'date');
+  }, [benchmarkData]);
+  // weights: {indexCode: number 0-100}
+  const [blendWeights, setBlendWeights] = useState<Record<string, number>>({});
+  // Initialize blend weights when indices change
+  useEffect(() => {
+    if (!availableIndices.length) return;
+    setBlendWeights(prev => {
+      const next: Record<string, number> = {};
+      availableIndices.forEach(idx => { next[idx] = prev[idx] ?? 0; });
+      return next;
+    });
+  }, [availableIndices]);
 
   // ── Single global date range ──────────────────────────────────────────────
   const today = new Date().toISOString().split('T')[0];
@@ -113,10 +139,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [globalEnd, setGlobalEnd] = useState(today);
 
   useEffect(() => {
-    if (!pnlData.length) return;
-    const earliest = pnlData.map(p => p.sellDate).filter(Boolean).sort()[0] || '2020-01-01';
-    setGlobalStart(s => s || earliest);
-  }, [pnlData]);
+    setGlobalStart(s => s || '2024-01-01');
+  }, []);
 
   // ── Single filtered data memo ──────────────────────────────────────────────
   const filtered = useMemo(() =>
@@ -420,28 +444,53 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const scatterMin = scatterData.length ? Math.min(...scatterData.map((d: any) => Math.min(d.cost, d.price))) * 0.9 : 0;
   const scatterMax = scatterData.length ? Math.max(...scatterData.map((d: any) => Math.max(d.cost, d.price))) * 1.1 : 100;
 
-  // ── normalizedNav ─────────────────────────────────────────────────────────────
+  // ── normalizedNav (multi-index + blend) ───────────────────────────────────
   const normalizedNav = useMemo(() => {
-    if (!navData.length || !benchmarkNav.length) return [];
+    if (!navData.length || !benchmarkData.length) return [];
     const navSorted = [...navData].sort((a, b) => a.date.localeCompare(b.date));
-    const benchSorted = [...benchmarkNav].sort((a, b) => a.date.localeCompare(b.date));
+    const benchMap = new Map(benchmarkData.map(b => [b.date, b]));
     const startDate = navSorted[0].date;
     const navBase = navSorted[0].nav2 || navSorted[0].nav1 || 1;
-    const benchAtStart = benchSorted.find(b => b.date >= startDate);
-    if (!benchAtStart) return [];
-    const benchBase = benchAtStart.value;
-    const benchMap = new Map(benchSorted.map(b => [b.date, b.value]));
-    return navSorted
-      .map(n => {
-        const benchVal = benchMap.get(n.date);
-        return {
-          date: n.date,
-          portfolio: Math.round(((n.nav2 || n.nav1 || navBase) / navBase) * 100 * 100) / 100,
-          benchmark: benchVal ? Math.round((benchVal / benchBase) * 100 * 100) / 100 : null,
-        };
-      })
-      .filter(x => x.benchmark !== null);
-  }, [navData, benchmarkNav]);
+
+    // Find the base values for each index at portfolio start date
+    const basePoint = benchmarkData.find(b => b.date >= startDate);
+    if (!basePoint) return [];
+
+    // Compute total blend weight
+    const totalBlendW = (Object.values(blendWeights) as number[]).reduce((s: number, w: number) => s + w, 0);
+
+    return navSorted.map(n => {
+      const benchPoint = benchMap.get(n.date);
+      const row: any = {
+        date: n.date,
+        portfolio: Math.round(((n.nav2 || n.nav1 || navBase) / navBase) * 100 * 100) / 100,
+      };
+      // Individual indices (normalized to 100 at start)
+      availableIndices.forEach(idx => {
+        const baseVal = basePoint[idx] as number;
+        const curVal = benchPoint?.[idx] as number;
+        if (curVal && baseVal) {
+          row[idx] = Math.round((curVal / baseVal) * 100 * 100) / 100;
+        }
+      });
+      // Custom blend
+      if ((totalBlendW as number) > 0) {
+        let blendVal = 0;
+        let blendCoverage = 0;
+        availableIndices.forEach(idx => {
+          const w: number = blendWeights[idx] || 0;
+          const baseVal: number = basePoint[idx];
+          const curVal: number = benchPoint?.[idx];
+          if (w > 0 && curVal && baseVal) {
+            blendVal += (curVal / baseVal) * (w / (totalBlendW as number));
+            blendCoverage += w;
+          }
+        });
+        if (blendCoverage > 0) row['Custom Blend'] = Math.round(blendVal * 100 * 100) / 100;
+      }
+      return row;
+    }).filter(r => availableIndices.some(idx => r[idx] !== undefined) || r['Custom Blend'] !== undefined);
+  }, [navData, benchmarkData, availableIndices, blendWeights]);
 
   // ── P&L by dimension aggregation for donut charts ─────────────────────────────
   const portfolioByClass = useMemo(() => {
@@ -612,7 +661,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </div>
         <div className="flex gap-1 mt-3">
-          {(['pnl', 'trades', 'stocks', 'portfolio', 'benchmark'] as const).map(tab => (
+          {(['pnl', 'trades', 'stocks', 'portfolio', 'benchmark', 'income'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -620,7 +669,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 activeTab === tab ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'
               }`}
             >
-              {tab === 'pnl' ? 'P&L' : tab === 'trades' ? 'Trades' : tab === 'stocks' ? 'Stocks' : tab === 'portfolio' ? 'Portfolio' : 'Benchmark'}
+              {tab === 'pnl' ? 'P&L' : tab === 'trades' ? 'Trades' : tab === 'stocks' ? 'Stocks' : tab === 'portfolio' ? 'Portfolio' : tab === 'benchmark' ? 'Benchmark' : 'Income'}
             </button>
           ))}
         </div>
@@ -1377,97 +1426,335 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         )}
 
         {/* ══════════════════════════════════ BENCHMARK TAB ══════════════════════════════════ */}
-        {activeTab === 'benchmark' && (
-          <>
-            {benchmarkNav.length === 0 ? (
-              <Card>
-                <div className="text-center py-20">
-                  <Upload size={48} className="mx-auto text-slate-300 mb-4" />
-                  <p className="text-slate-500 mb-6">Upload a benchmark CSV to compare performance</p>
-                  <p className="text-slate-400 text-sm mb-6">CSV format: two columns — Date (YYYY-MM-DD), Value/Price</p>
-                  <label className="px-6 py-3 bg-blue-600 text-white rounded-xl cursor-pointer hover:bg-blue-700 transition-colors text-sm font-semibold">
-                    Upload Benchmark CSV
-                    <input
-                      type="file"
-                      accept=".csv"
-                      className="hidden"
-                      onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = ev => onBenchmarkUpload(ev.target?.result as string);
-                        reader.readAsText(file);
-                      }}
-                    />
-                  </label>
-                </div>
-              </Card>
-            ) : (
-              <>
+        {activeTab === 'benchmark' && (() => {
+          const benchLineColors = ['#f97316','#8b5cf6','#0ea5e9','#10b981','#f59e0b','#ef4444','#84cc16'];
+          const totalBlendW: number = (Object.values(blendWeights) as number[]).reduce((s: number, w: number) => s + w, 0);
+          return (
+            <>
+              {benchmarkData.length === 0 ? (
                 <Card>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm font-bold text-slate-700 mb-1">Benchmark Loaded</p>
-                      <p className="text-xs text-slate-500">
-                        {benchmarkNav.length} data points ({benchmarkNav[0]?.date} – {benchmarkNav[benchmarkNav.length - 1]?.date})
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg cursor-pointer hover:bg-slate-200 transition-colors text-xs font-semibold">
-                        Replace CSV
-                        <input
-                          type="file"
-                          accept=".csv"
-                          className="hidden"
-                          onChange={e => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => onBenchmarkUpload(ev.target?.result as string);
-                            reader.readAsText(file);
-                          }}
-                        />
-                      </label>
-                      <button
-                        onClick={() => onBenchmarkUpload('')}
-                        className="text-xs text-red-500 hover:underline flex items-center gap-1"
-                      >
-                        <X size={12} /> Clear
-                      </button>
-                    </div>
+                  <div className="text-center py-20">
+                    <Upload size={48} className="mx-auto text-slate-300 mb-4" />
+                    <p className="text-slate-500 mb-4">Upload the "Benchmark Indicies" Excel file</p>
+                    <p className="text-slate-400 text-xs mb-6">Format: Date column + one column per index (e.g. SPX.GI, HSI.HI, NDX.GI…)</p>
+                    <label className="px-6 py-3 bg-blue-600 text-white rounded-xl cursor-pointer hover:bg-blue-700 transition-colors text-sm font-semibold">
+                      Upload Benchmark Excel
+                      <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onBenchmarkUpload(f); }} />
+                    </label>
                   </div>
                 </Card>
-
-                {normalizedNav.length > 0 ? (
+              ) : (
+                <>
+                  {/* Header: file info + replace/clear */}
                   <Card>
-                    <SectionHeader
-                      title="Portfolio vs Benchmark (Normalized to 100)"
-                      info="Both series normalized to 100 at the portfolio start date for apples-to-apples comparison."
-                      icon={<Activity size={16} />}
-                    />
-                    <ResponsiveContainer width="100%" height={320}>
-                      <LineChart data={normalizedNav}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                        <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                        <YAxis tickFormatter={v => `${v}`} tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
-                        <Tooltip formatter={(v: any, name: string) => [`${v}`, name]} />
-                        <Legend wrapperStyle={{ fontSize: '11px' }} />
-                        <Line type="monotone" dataKey="portfolio" name="My Portfolio" stroke="#2563eb" strokeWidth={2} dot={false} />
-                        <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="#f97316" strokeWidth={2} dot={false} />
-                      </LineChart>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-sm font-bold text-slate-700 mb-1">Benchmark Indices Loaded</p>
+                        <p className="text-xs text-slate-500">
+                          {benchmarkData.length} days · {availableIndices.length} indices ({benchmarkData[0]?.date} – {benchmarkData[benchmarkData.length - 1]?.date})
+                        </p>
+                        <p className="text-xs text-slate-400 mt-0.5">{availableIndices.join(' · ')}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg cursor-pointer hover:bg-slate-200 text-xs font-semibold">
+                          Replace
+                          <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onBenchmarkUpload(f); }} />
+                        </label>
+                        <button onClick={onBenchmarkClear} className="text-xs text-red-500 hover:underline flex items-center gap-1"><X size={12} /> Clear</button>
+                      </div>
+                    </div>
+                  </Card>
+
+                  {/* Custom Blend Builder */}
+                  <Card>
+                    <SectionHeader title="Custom Blend" info="Set weights (0–100) for each index. They are automatically normalised so they sum to 100%." icon={<Target size={16} />} />
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {availableIndices.map((idx, ci) => (
+                        <div key={idx} className="flex flex-col gap-1 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{idx}</span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number" min={0} max={100} step={5}
+                              value={blendWeights[idx] ?? 0}
+                              onChange={e => setBlendWeights(prev => ({ ...prev, [idx]: Math.max(0, Math.min(100, Number(e.target.value))) }))}
+                              className="w-16 text-xs font-bold border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500"
+                            />
+                            <span className="text-xs text-slate-400">%</span>
+                          </div>
+                          {totalBlendW > 0 && ((blendWeights[idx] as number) || 0) > 0 && (
+                            <span className="text-[9px] text-slate-400">({((((blendWeights[idx] as number) || 0) / totalBlendW) * 100).toFixed(0)}% of blend)</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {totalBlendW > 0 && (
+                      <p className="text-xs text-slate-500 mt-3">Total weight: {totalBlendW} → normalised to 100%</p>
+                    )}
+                  </Card>
+
+                  {/* Chart */}
+                  {normalizedNav.length > 0 ? (
+                    <Card>
+                      <SectionHeader title="Portfolio vs Indices (Normalized to 100)" info="All series normalized to 100 at the first portfolio NAV date for comparison." icon={<Activity size={16} />} />
+                      <ResponsiveContainer width="100%" height={360}>
+                        <LineChart data={normalizedNav}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                          <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                          <YAxis tickFormatter={v => `${v}`} tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                          <Tooltip formatter={(v: any, name: string) => [`${Number(v).toFixed(1)}`, name]} />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Line type="monotone" dataKey="portfolio" name="My Portfolio" stroke="#2563eb" strokeWidth={2.5} dot={false} />
+                          {availableIndices.map((idx, ci) => (
+                            <Line key={idx} type="monotone" dataKey={idx} name={idx} stroke={benchLineColors[ci % benchLineColors.length]} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                          ))}
+                          {totalBlendW > 0 && (
+                            <Line type="monotone" dataKey="Custom Blend" name="Custom Blend" stroke="#ef4444" strokeWidth={2} dot={false} />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Card>
+                  ) : (
+                    <Card>
+                      <p className="text-slate-400 text-sm text-center py-8">No overlapping dates between portfolio NAV and benchmark data.</p>
+                    </Card>
+                  )}
+
+                  {/* Index performance summary table */}
+                  {normalizedNav.length > 0 && (() => {
+                    const first = normalizedNav[0] as any;
+                    const last = normalizedNav[normalizedNav.length - 1] as any;
+                    const allKeys = ['portfolio', ...availableIndices, ...(totalBlendW > 0 ? ['Custom Blend'] : [])];
+                    return (
+                      <Card>
+                        <SectionHeader title="Performance Summary" info="Return over the overlapping period (normalized to 100 at start)." icon={<BarChart3 size={16} />} />
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-100">
+                                <th className="text-left py-2 font-bold text-slate-500">Index</th>
+                                <th className="text-right py-2 font-bold text-slate-500">Start</th>
+                                <th className="text-right py-2 font-bold text-slate-500">End</th>
+                                <th className="text-right py-2 font-bold text-slate-500">Return</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {allKeys.map(k => {
+                                const startVal = first[k] as number;
+                                const endVal = last[k] as number;
+                                if (!startVal || !endVal) return null;
+                                const ret = ((endVal - startVal) / startVal) * 100;
+                                return (
+                                  <tr key={k} className="border-b border-slate-50 hover:bg-slate-50">
+                                    <td className="py-2 font-bold text-slate-700">{k === 'portfolio' ? 'My Portfolio' : k}</td>
+                                    <td className="py-2 text-right text-slate-500">{startVal.toFixed(1)}</td>
+                                    <td className="py-2 text-right text-slate-500">{endVal.toFixed(1)}</td>
+                                    <td className={`py-2 text-right font-bold ${ret >= 0 ? 'text-red-500' : 'text-emerald-600'}`}>{ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </Card>
+                    );
+                  })()}
+                </>
+              )}
+            </>
+          );
+        })()}
+
+        {/* ══════════════════════════════════ INCOME TAB ══════════════════════════════════ */}
+        {activeTab === 'income' && (() => {
+          // Filter by global date range
+          const filtDivs = dividendData.filter(d => d.date && (!globalStart || d.date >= globalStart) && d.date <= globalEnd);
+          const filtInts = interestData.filter(d => d.date && (!globalStart || d.date >= globalStart) && d.date <= globalEnd);
+          const filtCash = cashLedger.filter(d => d.date && (!globalStart || d.date >= globalStart) && d.date <= globalEnd);
+
+          // Totals (convert to USD using fixed rates for non-USD)
+          const toUsd = (amount: number, currency: string) => {
+            const c = (currency || 'USD').toUpperCase();
+            if (c === 'HKD') return amount / marketConstants.exg_rate;
+            if (c === 'AUD') return amount / marketConstants.aud_exg;
+            if (c === 'SGD') return amount / marketConstants.sg_exg;
+            return amount;
+          };
+
+          const totalDivGross = filtDivs.reduce((s, d) => s + toUsd(d.grossAmount, d.currency), 0);
+          const totalDivTax = filtDivs.reduce((s, d) => s + toUsd(d.withholdingTax, d.currency), 0);
+          const totalDivNet = filtDivs.reduce((s, d) => s + toUsd(d.netAmount, d.currency), 0);
+          const totalInt = filtInts.reduce((s, d) => s + toUsd(d.amount, d.currency), 0);
+          const totalIncome = totalDivNet + totalInt;
+
+          // Cash ledger: deposits, withdrawals, fees
+          const deposits = filtCash.filter(c => c.type.toLowerCase() === 'deposit').reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
+          const withdrawals = filtCash.filter(c => c.type.toLowerCase() === 'withdrawal').reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
+          const fees = filtCash.filter(c => c.type.toLowerCase() === 'fee').reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
+          const netCash = filtCash.reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
+          // Running cash balance (all time)
+          const runningBalance = cashLedger
+            .filter(c => ['deposit','withdrawal','fee'].includes(c.type.toLowerCase()))
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
+
+          // Monthly dividend aggregation
+          const divByMonth = new Map<string, number>();
+          filtDivs.forEach(d => {
+            const key = d.date.substring(0, 7);
+            divByMonth.set(key, (divByMonth.get(key) || 0) + toUsd(d.netAmount, d.currency));
+          });
+          const divMonthlyChart = Array.from(divByMonth.entries()).sort(([a],[b]) => a.localeCompare(b)).map(([month, net]) => ({ month, net: Math.round(net) }));
+
+          // Dividend by stock
+          const divByStock = new Map<string, number>();
+          filtDivs.forEach(d => { divByStock.set(d.symbol, (divByStock.get(d.symbol) || 0) + toUsd(d.netAmount, d.currency)); });
+          const divStockChart = Array.from(divByStock.entries()).sort(([,a],[,b]) => b - a).slice(0, 15).map(([stock, net]) => ({ stock, net: Math.round(net) }));
+
+          // Interest by type
+          const intByType = new Map<string, number>();
+          filtInts.forEach(d => { intByType.set(d.type || 'Other', (intByType.get(d.type || 'Other') || 0) + toUsd(d.amount, d.currency)); });
+          const intTypeChart = Array.from(intByType.entries()).map(([type, amt]) => ({ type, amt: Math.round(amt) }));
+
+          // Cash ledger timeline
+          const cashTimeline: any[] = [];
+          let runBal = 0;
+          cashLedger.sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
+            runBal += toUsd(c.amount, c.currency);
+            cashTimeline.push({ date: c.date, balance: Math.round(runBal) });
+          });
+
+          const fmtUsd = (v: number) => v >= 0 ? `+$${Math.round(Math.abs(v)).toLocaleString()}` : `-$${Math.round(Math.abs(v)).toLocaleString()}`;
+
+          return (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { label: 'Net Dividend Income', value: totalDivNet, sub: `Tax withheld: $${Math.round(totalDivTax).toLocaleString()}` },
+                  { label: 'Interest Income', value: totalInt, sub: `${filtInts.length} entries` },
+                  { label: 'Total Income', value: totalIncome, sub: 'Div + Interest (USD)' },
+                  { label: 'Cash Balance', value: runningBalance, sub: `Deposits: ${fmtUsd(deposits)}  Withdrawals: ${fmtUsd(withdrawals)}` },
+                ].map(({ label, value, sub }) => (
+                  <Card key={label}>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</p>
+                    <p className={`text-2xl font-black ${value >= 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                      {value >= 0 ? '+' : ''}{value < 0 ? '-' : ''}${Math.round(Math.abs(value)).toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-1">{sub}</p>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Monthly dividend chart */}
+              {divMonthlyChart.length > 0 && (
+                <Card>
+                  <SectionHeader title="Monthly Dividend Income (USD)" info="Net dividend received each month, converted to USD." icon={<TrendingUp size={16} />} />
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={divMonthlyChart}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="month" tick={{ fontSize: 9 }} />
+                      <YAxis tickFormatter={v => `$${v}`} tick={{ fontSize: 10 }} />
+                      <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Net Dividend']} />
+                      <Bar dataKey="net" name="Net Dividend" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Dividend by stock */}
+                {divStockChart.length > 0 && (
+                  <Card>
+                    <SectionHeader title="Dividend by Stock (USD Net)" info="Top 15 dividend-paying stocks in the period." icon={<Award size={16} />} />
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={divStockChart} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                        <XAxis type="number" tickFormatter={v => `$${v}`} tick={{ fontSize: 9 }} />
+                        <YAxis type="category" dataKey="stock" tick={{ fontSize: 9 }} width={50} />
+                        <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Net Div']} />
+                        <Bar dataKey="net" fill="#ef4444" radius={[0, 3, 3, 0]} />
+                      </BarChart>
                     </ResponsiveContainer>
                   </Card>
-                ) : (
+                )}
+
+                {/* Interest by type */}
+                {intTypeChart.length > 0 && (
                   <Card>
-                    <p className="text-slate-400 text-sm text-center py-8">
-                      No overlapping dates between portfolio NAV and benchmark. Make sure dates align.
-                    </p>
+                    <SectionHeader title="Interest by Type (USD)" info="Interest/money-market income grouped by type." icon={<Zap size={16} />} />
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={intTypeChart}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <XAxis dataKey="type" tick={{ fontSize: 9 }} />
+                        <YAxis tickFormatter={v => `$${v}`} tick={{ fontSize: 10 }} />
+                        <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Amount']} />
+                        <Bar dataKey="amt" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
                   </Card>
                 )}
-              </>
-            )}
-          </>
-        )}
+              </div>
+
+              {/* Cash balance timeline */}
+              {cashTimeline.length > 0 && (
+                <Card>
+                  <SectionHeader title="Cumulative Cash Balance" info="Running total of all cash ledger entries (deposits, withdrawals, fees), converted to USD." icon={<Clock size={16} />} />
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={cashTimeline}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                      <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fontSize: 9 }} />
+                      <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Balance']} />
+                      <Area type="monotone" dataKey="balance" stroke="#2563eb" fill="#dbeafe" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+
+              {/* Cash Ledger detail table */}
+              {filtCash.length > 0 && (
+                <Card>
+                  <SectionHeader title="Cash Ledger" info="All cash transactions in the selected period." icon={<Layers size={16} />} />
+                  <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="border-b border-slate-100">
+                          {['Date','Type','Description','Amount','Currency','Source'].map(h => (
+                            <th key={h} className="text-left py-2 px-2 font-bold text-slate-500">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...filtCash].sort((a, b) => b.date.localeCompare(a.date)).map(c => (
+                          <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
+                            <td className="py-1.5 px-2 text-slate-600">{c.date}</td>
+                            <td className="py-1.5 px-2">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${c.type.toLowerCase() === 'deposit' ? 'bg-red-50 text-red-600' : c.type.toLowerCase() === 'withdrawal' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{c.type}</span>
+                            </td>
+                            <td className="py-1.5 px-2 text-slate-600 max-w-xs truncate">{c.description}</td>
+                            <td className={`py-1.5 px-2 font-bold text-right ${c.amount >= 0 ? 'text-red-500' : 'text-emerald-600'}`}>{c.amount >= 0 ? '+' : ''}{c.amount.toLocaleString()}</td>
+                            <td className="py-1.5 px-2 text-slate-400">{c.currency}</td>
+                            <td className="py-1.5 px-2 text-slate-400">{c.source}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+
+              {filtDivs.length === 0 && filtInts.length === 0 && filtCash.length === 0 && (
+                <Card>
+                  <div className="text-center py-16">
+                    <Upload size={40} className="mx-auto text-slate-300 mb-3" />
+                    <p className="text-slate-500 text-sm">No income data for the selected period.</p>
+                    <p className="text-slate-400 text-xs mt-1">Upload a file with Dividends, Interest, or Cash Ledger sheets.</p>
+                  </div>
+                </Card>
+              )}
+            </>
+          );
+        })()}
       </div>
     </div>
   );
