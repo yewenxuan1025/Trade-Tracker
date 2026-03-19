@@ -102,12 +102,6 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
-  useEffect(() => {
-    if (!lookupData) return;
-    setTransactions(prev => enrichTransactions(prev, lookupData));
-  }, [lookupData, enrichTransactions]);
-
   // Persistence
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(marketConstants)), [marketConstants]);
   useEffect(() => { if (lookupData) localStorage.setItem(LOOKUP_DATA_KEY, JSON.stringify(lookupData)); }, [lookupData]);
@@ -133,6 +127,12 @@ const App: React.FC = () => {
       };
     });
   }, []);
+
+  // Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
+  useEffect(() => {
+    if (!lookupData) return;
+    setTransactions(prev => enrichTransactions(prev, lookupData));
+  }, [lookupData, enrichTransactions]);
 
   const handleFileProcess = async (file: File) => {
     setIsProcessing(true);
