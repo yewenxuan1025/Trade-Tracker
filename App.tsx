@@ -102,6 +102,12 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
+  // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
+  useEffect(() => {
+    if (!lookupData) return;
+    setTransactions(prev => enrichTransactions(prev, lookupData));
+  }, [lookupData, enrichTransactions]);
+
   // Persistence
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(marketConstants)), [marketConstants]);
   useEffect(() => { if (lookupData) localStorage.setItem(LOOKUP_DATA_KEY, JSON.stringify(lookupData)); }, [lookupData]);
@@ -153,11 +159,63 @@ const App: React.FC = () => {
       if (result.interest.length > 0) setInterestData(result.interest);
       if (result.cashLedger.length > 0) {
         setCashLedger(result.cashLedger);
-        // Derive cashPosition from ledger: sum of Deposit/Withdrawal entries
-        const netCash = result.cashLedger
-          .filter(e => ['deposit','withdrawal'].includes(e.type.toLowerCase()))
-          .reduce((s, e) => s + e.amount, 0);
-        if (netCash !== 0) setCashPosition(netCash);
+      }
+      // Comprehensive cash balance calculation:
+      //   Cash = NetLedger + RealizedP&L + Dividends + Interest + OpenPositionCosts
+      //
+      // Cash Ledger: include all types EXCEPT "FX Conversion" (which is a zero-sum currency swap).
+      //   NOTE: "Transfer" IS included — inter-account ACATS transfers appear as "Withdrawal" in IB
+      //   and "Transfer" in IB AUS; excluding Transfer would cause a large negative bias.
+      //
+      // All amounts converted to USD using current exchange rates.
+      {
+        const mc = marketConstants;
+        const toUsdByCurrency = (amount: number, currency: string) => {
+          const c = (currency || 'USD').toUpperCase();
+          if (c === 'HKD') return amount / mc.exg_rate;
+          if (c === 'AUD') return amount / mc.aud_exg;
+          if (c === 'SGD') return amount / mc.sg_exg;
+          return amount;
+        };
+        const toUsdByMarket = (amount: number, market: string) => {
+          const m = (market || '').toUpperCase().trim();
+          if (m === 'HK') return amount / mc.exg_rate;
+          if (m === 'AUS') return amount / mc.aud_exg;
+          if (m === 'SG') return amount / mc.sg_exg;
+          return amount;
+        };
+
+        // Use fresh result data; fall back to current state if file had no data for that sheet
+        const ledger   = result.cashLedger.length > 0  ? result.cashLedger  : cashLedger;
+        const pnl      = result.pnl.length > 0          ? result.pnl         : pnlData;
+        const divs     = result.dividends.length > 0    ? result.dividends   : dividendData;
+        const ints     = result.interest.length > 0     ? result.interest    : interestData;
+        const txns     = enrichTransactions(result.transactions, result.lookup);
+        const optTxns  = result.optionTransactions;
+
+        // 1. External cash flows (exclude FX Conversion — just a currency swap, should net to 0)
+        const EXCLUDED_LEDGER_TYPES = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
+        const netLedger = ledger
+          .filter(e => !EXCLUDED_LEDGER_TYPES.has(e.type.toLowerCase().replace(/[-\s]+/g, '')))
+          .reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
+
+        // 2. Realized P&L from closed trades (native currency per market)
+        const realizedPnl = pnl.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || ''), 0);
+
+        // 3. Dividends received
+        const dividends = divs.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
+
+        // 4. Interest received
+        const interest = ints.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
+
+        // 5. Cost of open stock positions (total is negative for buys)
+        const openStockCost = txns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+
+        // 6. Cost of open option positions
+        const openOptionCost = optTxns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+
+        const newCash = netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost;
+        setCashPosition(parseFloat(newCash.toFixed(2)));
       }
       setIsUploading(false);
       if (result.warnings.length > 0) {
@@ -314,6 +372,42 @@ const App: React.FC = () => {
       });
     }
   }, []);
+
+  // Independent income data upload (Dividends / Interest / Cash Ledger only)
+  const handleIncomeUpload = useCallback(async (file: File) => {
+    try {
+      const result = await parseExcelFile(file);
+      if (result.dividends.length > 0) {
+        setDividendData(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
+          const fresh = result.dividends.filter(d => !existing.has(`${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.dividends.length} dividend records`, 'success');
+      }
+      if (result.interest.length > 0) {
+        setInterestData(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.amount}|${d.source}`));
+          const fresh = result.interest.filter(d => !existing.has(`${d.date}|${d.amount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.interest.length} interest records`, 'success');
+      }
+      if (result.cashLedger.length > 0) {
+        setCashLedger(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.type}|${d.amount}|${d.source}`));
+          const fresh = result.cashLedger.filter(d => !existing.has(`${d.date}|${d.type}|${d.amount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.cashLedger.length} cash ledger entries`, 'success');
+      }
+      if (!result.dividends.length && !result.interest.length && !result.cashLedger.length) {
+        showToast('No Dividends, Interest, or Cash Ledger sheets found in file', 'info');
+      }
+    } catch (e) {
+      showToast('Error reading income file: ' + (e as Error).message, 'error');
+    }
+  }, [showToast]);
 
   const handleBenchmarkUpload = useCallback(async (file: File) => {
     try {
@@ -560,6 +654,7 @@ const App: React.FC = () => {
                 dividendData={dividendData}
                 interestData={interestData}
                 cashLedger={cashLedger}
+                onIncomeUpload={handleIncomeUpload}
               />
             )}
             {activeTab === 'lookup' && (
