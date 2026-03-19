@@ -28,6 +28,7 @@ interface AnalyticsDashboardProps {
   dividendData: DividendData[];
   interestData: InterestData[];
   cashLedger: CashLedgerEntry[];
+  onIncomeUpload?: (file: File) => void;
 }
 
 const CHART_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#84cc16', '#f97316'];
@@ -108,6 +109,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   dividendData,
   interestData,
   cashLedger,
+  onIncomeUpload,
 }) => {
   const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark' | 'income'>('pnl');
   const [concentrationThreshold, setConcentrationThreshold] = useState(10);
@@ -115,15 +117,22 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
   const [heatFreq, setHeatFreq] = useState<HeatFreq>('monthly');
 
-  // ── Benchmark blend state ─────────────────────────────────────────────────
+  // ── Benchmark blend state (persisted to localStorage) ─────────────────────
+  const BLEND_WEIGHTS_KEY = 'trade_tracker_blend_weights';
   // Derive available index keys from benchmarkData columns
   const availableIndices = useMemo(() => {
     if (!benchmarkData.length) return [];
     return Object.keys(benchmarkData[0]).filter(k => k !== 'date');
   }, [benchmarkData]);
-  // weights: {indexCode: number 0-100}
-  const [blendWeights, setBlendWeights] = useState<Record<string, number>>({});
-  // Initialize blend weights when indices change
+  // weights: {indexCode: number 0-100} — load from localStorage on mount
+  const [blendWeights, setBlendWeights] = useState<Record<string, number>>(() => {
+    try { const s = localStorage.getItem(BLEND_WEIGHTS_KEY); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  });
+  // Persist blend weights whenever they change
+  useEffect(() => {
+    localStorage.setItem(BLEND_WEIGHTS_KEY, JSON.stringify(blendWeights));
+  }, [blendWeights]);
+  // Initialize blend weights when indices change (add new, keep existing)
   useEffect(() => {
     if (!availableIndices.length) return;
     setBlendWeights(prev => {
@@ -447,7 +456,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   // ── normalizedNav (multi-index + blend) ───────────────────────────────────
   const normalizedNav = useMemo(() => {
     if (!navData.length || !benchmarkData.length) return [];
-    const navSorted = [...navData].sort((a, b) => a.date.localeCompare(b.date));
+    // Filter NAV by global date range
+    let navSorted = [...navData].sort((a, b) => a.date.localeCompare(b.date));
+    if (globalStart) navSorted = navSorted.filter(n => n.date >= globalStart);
+    if (globalEnd) navSorted = navSorted.filter(n => n.date <= globalEnd);
+    if (!navSorted.length) return [];
     const benchMap = new Map(benchmarkData.map(b => [b.date, b]));
     const startDate = navSorted[0].date;
     const navBase = navSorted[0].nav2 || navSorted[0].nav1 || 1;
@@ -1633,7 +1646,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   { label: 'Net Dividend Income', value: totalDivNet, sub: `Tax withheld: $${Math.round(totalDivTax).toLocaleString()}` },
                   { label: 'Interest Income', value: totalInt, sub: `${filtInts.length} entries` },
                   { label: 'Total Income', value: totalIncome, sub: 'Div + Interest (USD)' },
-                  { label: 'Cash Balance', value: runningBalance, sub: `Deposits: ${fmtUsd(deposits)}  Withdrawals: ${fmtUsd(withdrawals)}` },
+                  { label: 'Net Cash Flows', value: runningBalance, sub: `Deposits: ${fmtUsd(deposits)}  Withdrawals: ${fmtUsd(withdrawals)}` },
                 ].map(({ label, value, sub }) => (
                   <Card key={label}>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</p>
@@ -1663,20 +1676,25 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Dividend by stock */}
-                {divStockChart.length > 0 && (
-                  <Card>
-                    <SectionHeader title="Dividend by Stock (USD Net)" info="Top 15 dividend-paying stocks in the period." icon={<Award size={16} />} />
-                    <ResponsiveContainer width="100%" height={240}>
-                      <BarChart data={divStockChart} layout="vertical">
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                        <XAxis type="number" tickFormatter={v => `$${v}`} tick={{ fontSize: 9 }} />
-                        <YAxis type="category" dataKey="stock" tick={{ fontSize: 9 }} width={50} />
-                        <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Net Div']} />
-                        <Bar dataKey="net" fill="#ef4444" radius={[0, 3, 3, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </Card>
-                )}
+                {divStockChart.length > 0 && (() => {
+                  const maxTickerLen = Math.max(...divStockChart.map(d => (d.stock || '').length), 4);
+                  const yAxisWidth = Math.max(60, maxTickerLen * 7 + 8);
+                  const chartHeight = Math.max(240, divStockChart.length * 22 + 40);
+                  return (
+                    <Card>
+                      <SectionHeader title="Dividend by Stock (USD Net)" info="Top 15 dividend-paying stocks in the period." icon={<Award size={16} />} />
+                      <ResponsiveContainer width="100%" height={chartHeight}>
+                        <BarChart data={divStockChart} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                          <XAxis type="number" tickFormatter={v => `$${v}`} tick={{ fontSize: 9 }} />
+                          <YAxis type="category" dataKey="stock" tick={{ fontSize: 9 }} width={yAxisWidth} />
+                          <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Net Div']} />
+                          <Bar dataKey="net" fill="#ef4444" radius={[0, 3, 3, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Card>
+                  );
+                })()}
 
                 {/* Interest by type */}
                 {intTypeChart.length > 0 && (
@@ -1698,7 +1716,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               {/* Cash balance timeline */}
               {cashTimeline.length > 0 && (
                 <Card>
-                  <SectionHeader title="Cumulative Cash Balance" info="Running total of all cash ledger entries (deposits, withdrawals, fees), converted to USD." icon={<Clock size={16} />} />
+                  <SectionHeader title="Cumulative Net Cash Flows" info="Running total of all cash ledger entries (deposits, withdrawals, fees). This is NOT the brokerage account cash balance — set that manually in Summary." icon={<Clock size={16} />} />
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={cashTimeline}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
@@ -1740,6 +1758,29 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       </tbody>
                     </table>
                   </div>
+                </Card>
+              )}
+
+              {/* Upload panel for independent income data upload */}
+              {onIncomeUpload && (
+                <Card>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-slate-700">Upload Income Data</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Upload an Excel file containing Dividends, Interest, and/or Cash Ledger sheets to add income data independently.</p>
+                    </div>
+                    <label className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl cursor-pointer hover:bg-blue-700 transition-colors text-xs font-semibold whitespace-nowrap">
+                      <Upload size={13} /> Upload Income File
+                      <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) { onIncomeUpload(f); e.target.value = ''; } }} />
+                    </label>
+                  </div>
+                  {dividendData.length > 0 || interestData.length > 0 || cashLedger.length > 0 ? (
+                    <div className="mt-3 flex gap-4 text-xs text-slate-500">
+                      {dividendData.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" />{dividendData.length} dividend records</span>}
+                      {interestData.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-400 inline-block" />{interestData.length} interest records</span>}
+                      {cashLedger.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block" />{cashLedger.length} cash ledger entries</span>}
+                    </div>
+                  ) : null}
                 </Card>
               )}
 

@@ -102,6 +102,12 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
+  // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
+  useEffect(() => {
+    if (!lookupData) return;
+    setTransactions(prev => enrichTransactions(prev, lookupData));
+  }, [lookupData, enrichTransactions]);
+
   // Persistence
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(marketConstants)), [marketConstants]);
   useEffect(() => { if (lookupData) localStorage.setItem(LOOKUP_DATA_KEY, JSON.stringify(lookupData)); }, [lookupData]);
@@ -153,11 +159,8 @@ const App: React.FC = () => {
       if (result.interest.length > 0) setInterestData(result.interest);
       if (result.cashLedger.length > 0) {
         setCashLedger(result.cashLedger);
-        // Derive cashPosition from ledger: sum of Deposit/Withdrawal entries
-        const netCash = result.cashLedger
-          .filter(e => ['deposit','withdrawal'].includes(e.type.toLowerCase()))
-          .reduce((s, e) => s + e.amount, 0);
-        if (netCash !== 0) setCashPosition(netCash);
+        // Note: cashPosition is NOT auto-derived from the ledger (ledger tracks cash flows,
+        // not the actual uninvested brokerage cash balance). Set it manually in Summary.
       }
       setIsUploading(false);
       if (result.warnings.length > 0) {
@@ -314,6 +317,42 @@ const App: React.FC = () => {
       });
     }
   }, []);
+
+  // Independent income data upload (Dividends / Interest / Cash Ledger only)
+  const handleIncomeUpload = useCallback(async (file: File) => {
+    try {
+      const result = await parseExcelFile(file);
+      if (result.dividends.length > 0) {
+        setDividendData(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
+          const fresh = result.dividends.filter(d => !existing.has(`${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.dividends.length} dividend records`, 'success');
+      }
+      if (result.interest.length > 0) {
+        setInterestData(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.amount}|${d.source}`));
+          const fresh = result.interest.filter(d => !existing.has(`${d.date}|${d.amount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.interest.length} interest records`, 'success');
+      }
+      if (result.cashLedger.length > 0) {
+        setCashLedger(prev => {
+          const existing = new Set(prev.map(d => `${d.date}|${d.type}|${d.amount}|${d.source}`));
+          const fresh = result.cashLedger.filter(d => !existing.has(`${d.date}|${d.type}|${d.amount}|${d.source}`));
+          return [...prev, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+        });
+        showToast(`Loaded ${result.cashLedger.length} cash ledger entries`, 'success');
+      }
+      if (!result.dividends.length && !result.interest.length && !result.cashLedger.length) {
+        showToast('No Dividends, Interest, or Cash Ledger sheets found in file', 'info');
+      }
+    } catch (e) {
+      showToast('Error reading income file: ' + (e as Error).message, 'error');
+    }
+  }, [showToast]);
 
   const handleBenchmarkUpload = useCallback(async (file: File) => {
     try {
@@ -560,6 +599,7 @@ const App: React.FC = () => {
                 dividendData={dividendData}
                 interestData={interestData}
                 cashLedger={cashLedger}
+                onIncomeUpload={handleIncomeUpload}
               />
             )}
             {activeTab === 'lookup' && (
