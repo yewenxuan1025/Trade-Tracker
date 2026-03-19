@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState } from 'react';
-import { PnLData, MarketConstants, TransactionData, LookupSheetData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
-import { BarChart3, Table as TableIcon, Calculator, Filter, Archive } from 'lucide-react';
+import { PnLData, MarketConstants, TransactionData, LookupSheetData, CashLedgerEntry, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
+import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 
 
 interface SummaryDashboardProps {
@@ -12,9 +12,27 @@ interface SummaryDashboardProps {
   cashPosition: number;
   onUpdateCash: (val: number) => void;
   optionPosition: number;
+  cashLedger?: CashLedgerEntry[];
+  onCashTransaction?: (entry: Omit<CashLedgerEntry, 'id'>) => void;
 }
 
-const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition }) => {
+const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction }) => {
+
+  // Cash deposit/withdrawal modal state
+  const [showCashModal, setShowCashModal] = useState(false);
+  const [cashForm, setCashForm] = useState({ type: 'Deposit', amount: '', date: new Date().toISOString().split('T')[0], currency: 'USD', source: '', description: '' });
+
+  const handleCashSubmit = () => {
+    if (!cashForm.amount || parseFloat(cashForm.amount) === 0) return;
+    const amt = cashForm.type === 'Withdrawal' ? -Math.abs(parseFloat(cashForm.amount)) : Math.abs(parseFloat(cashForm.amount));
+    onCashTransaction?.({
+      date: cashForm.date, type: cashForm.type,
+      description: cashForm.description || `${cashForm.type} via Summary`,
+      amount: amt, currency: cashForm.currency, source: cashForm.source
+    });
+    setShowCashModal(false);
+    setCashForm({ type: 'Deposit', amount: '', date: new Date().toISOString().split('T')[0], currency: 'USD', source: '', description: '' });
+  };
 
   // Filters and Selection for Holdings Analysis
   const [filterType, setFilterType] = useState('All');
@@ -347,11 +365,18 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     <div className="flex flex-col h-full overflow-y-auto custom-scrollbar p-1 space-y-8 pb-20">
       <section>
         <div className="flex flex-col gap-6 mb-8">
-           <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-600 rounded-lg shadow-lg shadow-blue-200">
-                <BarChart3 className="text-white w-6 h-6" />
+           <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-600 rounded-lg shadow-lg shadow-blue-200">
+                  <BarChart3 className="text-white w-6 h-6" />
+                </div>
+                <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Portfolio Overview</h2>
               </div>
-              <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Portfolio Overview</h2>
+              {lookupData?.lookupDate && (
+                <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                  Data Current: {lookupData.lookupDate}
+                </span>
+              )}
            </div>
 
            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden max-w-2xl">
@@ -447,12 +472,17 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           <div className="flex items-center gap-2">
                               <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-200"></div>
                               <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Cash Position</span>
+                              {onCashTransaction && (
+                                <button onClick={() => setShowCashModal(true)} className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors text-[10px] font-bold border border-emerald-200">
+                                  <Plus size={10} /> Deposit / Withdraw
+                                </button>
+                              )}
                           </div>
                           <div className="text-right flex items-center gap-2">
                               <div className="flex items-center gap-1 border-b border-dashed border-slate-300 hover:border-emerald-500 transition-colors group-focus-within:border-emerald-500">
                                 <span className="text-sm font-black text-emerald-600">$</span>
-                                <input 
-                                  type="number" 
+                                <input
+                                  type="number"
                                   className="font-black text-base text-emerald-600 bg-transparent outline-none w-24 text-right py-0.5"
                                   value={cashPosition}
                                   onChange={(e) => onUpdateCash(parseFloat(e.target.value) || 0)}
@@ -718,6 +748,60 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           ))}
       </section>
 
+      {/* Cash Deposit / Withdrawal Modal */}
+      {showCashModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setShowCashModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-96 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-black text-slate-800">Cash Transaction</h3>
+            {/* Type */}
+            <div className="flex gap-2">
+              {['Deposit','Withdrawal'].map(t => (
+                <button key={t} onClick={() => setCashForm(f => ({ ...f, type: t }))}
+                  className={`flex-1 py-2 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2 ${cashForm.type === t ? (t === 'Deposit' ? 'bg-red-500 text-white' : 'bg-emerald-600 text-white') : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                  {t === 'Deposit' ? <ArrowDownCircle size={14}/> : <ArrowUpCircle size={14}/>} {t}
+                </button>
+              ))}
+            </div>
+            {/* Amount */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Amount</label>
+              <input type="number" min={0} step={100} value={cashForm.amount} onChange={e => setCashForm(f => ({ ...f, amount: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" placeholder="0" />
+            </div>
+            {/* Date */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Date</label>
+              <input type="date" value={cashForm.date} onChange={e => setCashForm(f => ({ ...f, date: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            {/* Currency */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Currency</label>
+              <select value={cashForm.currency} onChange={e => setCashForm(f => ({ ...f, currency: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
+                {['USD','HKD','AUD','SGD'].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            {/* Source */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Source / Account</label>
+              <input type="text" value={cashForm.source} onChange={e => setCashForm(f => ({ ...f, source: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. IB AUS" />
+            </div>
+            {/* Description */}
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Description (optional)</label>
+              <input type="text" value={cashForm.description} onChange={e => setCashForm(f => ({ ...f, description: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" placeholder="Funds received" />
+            </div>
+            {/* Buttons */}
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowCashModal(false)} className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200">Cancel</button>
+              <button onClick={handleCashSubmit} className="flex-1 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700">Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

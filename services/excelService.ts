@@ -1,6 +1,6 @@
 
 import * as XLSX from 'xlsx';
-import { LookupSheetData, StockData, TransactionData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData } from '../types';
+import { LookupSheetData, StockData, TransactionData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from '../types';
 
 /**
  * Robust ID generator
@@ -149,8 +149,63 @@ export interface ParseResult {
   optionTransactions: TransactionData[];
   pnl: PnLData[];
   navData: NavData[];
+  dividends: DividendData[];
+  interest: InterestData[];
+  cashLedger: CashLedgerEntry[];
   warnings: string[];
 }
+
+/** Parse the "Benchmark Indicies" Excel file (4 metadata rows, then Date + N index columns) */
+export const parseBenchmarkFile = async (file: File): Promise<BenchmarkData> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const workbook = XLSX.read(e.target?.result, { type: 'array', cellDates: true });
+        const sheetName = workbook.SheetNames[0];
+        const jsonRaw = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true }) as any[][];
+
+        // Find the header row: the row containing "Date" (case-insensitive) as first non-empty cell
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(jsonRaw.length, 10); i++) {
+          const firstCell = String(jsonRaw[i][0] || '').trim().toLowerCase();
+          if (firstCell === 'date') { headerIdx = i; break; }
+        }
+        if (headerIdx === -1) { resolve([]); return; }
+
+        const headers: string[] = jsonRaw[headerIdx].map((h: any) => String(h || '').trim());
+        const indexCols = headers.slice(1).filter(h => h); // all columns after Date
+
+        const result: BenchmarkData = [];
+        for (let i = headerIdx + 1; i < jsonRaw.length; i++) {
+          const row = jsonRaw[i];
+          if (!row || !row[0]) continue;
+          const dateVal = row[0];
+          let dateStr = '';
+          if (dateVal instanceof Date) {
+            dateStr = dateVal.toISOString().split('T')[0];
+          } else if (typeof dateVal === 'number') {
+            // Excel serial date
+            const d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
+            dateStr = d.toISOString().split('T')[0];
+          } else {
+            dateStr = String(dateVal).trim();
+          }
+          if (!dateStr) continue;
+          const point: any = { date: dateStr };
+          indexCols.forEach((col, ci) => {
+            const v = parseNumeric(row[ci + 1]);
+            if (v !== 0 || row[ci + 1] !== undefined) point[col] = v;
+          });
+          result.push(point);
+        }
+        resolve(result.sort((a, b) => a.date.localeCompare(b.date)));
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+};
 
 /**
  * Applies formatting (Column Widths and Number Formats) to a worksheet
@@ -227,12 +282,23 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         // --- PARSE LOOKUP SHEET ---
         const lookupSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'lookup');
         let stocks: StockData[] = [];
+        let lookupDate: string | undefined;
         if (lookupSheetName) {
             const sheet = workbook.Sheets[lookupSheetName];
             const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
             let headerRowIndex = -1;
             for (let i = 0; i < jsonData.length; i++) {
               const row = jsonData[i];
+              // Try to detect the lookup date from pre-header rows (e.g. a cell labelled "Date" or "Lookup Date")
+              if (!lookupDate) {
+                for (let ci = 0; ci < row.length - 1; ci++) {
+                  const label = String(row[ci] || '').trim().toLowerCase();
+                  if (label === 'date' || label === 'lookup date' || label === 'data date' || label === 'as of') {
+                    const dateVal = row[ci + 1];
+                    if (dateVal) lookupDate = parseExcelDate(dateVal);
+                  }
+                }
+              }
               if (row.some(cell => typeof cell === 'string' && (cell.trim() === 'Ticker' || cell.trim() === 'Company Name'))) {
                   headerRowIndex = i;
                   break;
@@ -267,6 +333,61 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     if (stock.ticker) stocks.push(stock as StockData);
                 }
             }
+        }
+
+        // --- PARSE DIVIDENDS SHEET ---
+        const dividendSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'dividends');
+        let dividends: DividendData[] = [];
+        if (dividendSheetName) {
+          const sheet = workbook.Sheets[dividendSheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+          dividends = rows.filter(r => r['Date'] || r['Symbol']).map(r => ({
+            id: generateId(),
+            date: parseExcelDate(r['Date']),
+            symbol: String(r['Symbol'] || ''),
+            name: String(r['Name'] || ''),
+            market: String(r['Market'] || ''),
+            grossAmount: parseNumeric(r['Gross Amount']),
+            withholdingTax: parseNumeric(r['Withholding Tax']),
+            netAmount: parseNumeric(r['Net Amount']),
+            currency: String(r['Currency'] || 'USD'),
+            source: String(r['Source'] || ''),
+            type: String(r['Type'] || ''),
+          }));
+        }
+
+        // --- PARSE INTEREST SHEET ---
+        const interestSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'interest');
+        let interest: InterestData[] = [];
+        if (interestSheetName) {
+          const sheet = workbook.Sheets[interestSheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+          interest = rows.filter(r => r['Date'] || r['Description']).map(r => ({
+            id: generateId(),
+            date: parseExcelDate(r['Date']),
+            description: String(r['Description'] || ''),
+            amount: parseNumeric(r['Amount']),
+            currency: String(r['Currency'] || 'USD'),
+            source: String(r['Source'] || ''),
+            type: String(r['Type'] || ''),
+          }));
+        }
+
+        // --- PARSE CASH LEDGER SHEET ---
+        const cashLedgerSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'cash ledger');
+        let cashLedger: CashLedgerEntry[] = [];
+        if (cashLedgerSheetName) {
+          const sheet = workbook.Sheets[cashLedgerSheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+          cashLedger = rows.filter(r => r['Date'] || r['Type']).map(r => ({
+            id: generateId(),
+            date: parseExcelDate(r['Date']),
+            type: String(r['Type'] || ''),
+            description: String(r['Description'] || ''),
+            amount: parseNumeric(r['Amount']),
+            currency: String(r['Currency'] || 'USD'),
+            source: String(r['Source'] || ''),
+          }));
         }
 
         // --- PARSE TRANSACTION SHEET (STOCKS) ---
@@ -548,7 +669,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
             }
         }
         
-        resolve({ lookup: { stocks, lastUpdated: new Date() }, transactions, optionTransactions, pnl: pnlData, navData, warnings });
+        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);
@@ -862,21 +983,24 @@ export const calculatePortfolioAnalysis = (
 };
 
 export const exportGlobalData = (
-    transactions: TransactionData[], 
-    pnlData: PnLData[], 
-    lookupData: LookupSheetData | null, 
-    marketConstants: MarketConstants, 
+    transactions: TransactionData[],
+    pnlData: PnLData[],
+    lookupData: LookupSheetData | null,
+    marketConstants: MarketConstants,
     cashPosition: number,
     optionPosition: number,
-    holdingsHk: any[], 
-    holdingsCcs: any[], 
-    holdingsUs: any[], 
+    holdingsHk: any[],
+    holdingsCcs: any[],
+    holdingsUs: any[],
     historyHk: any[],
     historyNonHk: any[],
     detailedHoldings: any[],
     weightedAvgs: any,
     navData: NavData[],
     optionTransactions: TransactionData[] = [],
+    dividends: DividendData[] = [],
+    interest: InterestData[] = [],
+    cashLedger: CashLedgerEntry[] = [],
     fileName: string = 'TradeTracker_Pro_Export.xlsx'
 ) => {
     const workbook = XLSX.utils.book_new();
@@ -1128,6 +1252,40 @@ export const exportGlobalData = (
         const ws = XLSX.utils.json_to_sheet(mappedNav);
         formatWorksheet(ws, mappedNav);
         XLSX.utils.book_append_sheet(workbook, ws, "NAV-daily");
+    }
+
+    // 9. DIVIDENDS
+    if (dividends.length > 0) {
+        const divRows = dividends.map(d => ({
+            Date: d.date, Symbol: d.symbol, Name: d.name, Market: d.market,
+            'Gross Amount': d.grossAmount, 'Withholding Tax': d.withholdingTax,
+            'Net Amount': d.netAmount, Currency: d.currency, Source: d.source, Type: d.type
+        }));
+        const ws = XLSX.utils.json_to_sheet(divRows);
+        formatWorksheet(ws, divRows);
+        XLSX.utils.book_append_sheet(workbook, ws, "Dividends");
+    }
+
+    // 10. INTEREST
+    if (interest.length > 0) {
+        const intRows = interest.map(d => ({
+            Date: d.date, Description: d.description, Amount: d.amount,
+            Currency: d.currency, Source: d.source, Type: d.type
+        }));
+        const ws = XLSX.utils.json_to_sheet(intRows);
+        formatWorksheet(ws, intRows);
+        XLSX.utils.book_append_sheet(workbook, ws, "Interest");
+    }
+
+    // 11. CASH LEDGER
+    if (cashLedger.length > 0) {
+        const clRows = cashLedger.map(d => ({
+            Date: d.date, Type: d.type, Description: d.description,
+            Amount: d.amount, Currency: d.currency, Source: d.source
+        }));
+        const ws = XLSX.utils.json_to_sheet(clRows);
+        formatWorksheet(ws, clRows);
+        XLSX.utils.book_append_sheet(workbook, ws, "Cash Ledger");
     }
 
     XLSX.writeFile(workbook, fileName);

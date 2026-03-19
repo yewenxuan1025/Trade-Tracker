@@ -108,7 +108,49 @@ export interface HoldingData {
 export interface LookupSheetData {
   stocks: StockData[];
   lastUpdated: Date;
+  lookupDate?: string; // "Data Current" date from the lookup sheet
 }
+
+export interface DividendData {
+  id: string;
+  date: string;
+  symbol: string;
+  name: string;
+  market: string;
+  grossAmount: number;
+  withholdingTax: number;
+  netAmount: number;
+  currency: string;
+  source: string;
+  type: string;
+}
+
+export interface InterestData {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: string;
+  source: string;
+  type: string;
+}
+
+export interface CashLedgerEntry {
+  id: string;
+  date: string;
+  type: string; // 'Deposit' | 'Withdrawal' | 'Fee' | 'Transfer' | etc.
+  description: string;
+  amount: number; // positive = inflow, negative = outflow
+  currency: string;
+  source: string;
+}
+
+// Benchmark: { date, [indexCode]: value, ... } – columns are dynamic
+export interface BenchmarkPoint {
+  date: string;
+  [key: string]: any; // index values are numbers, date is string
+}
+export type BenchmarkData = BenchmarkPoint[];
 
 // Maps Excel Header names to our internal interface keys
 export const EXCEL_HEADER_MAP: Record<string, keyof StockData> = {
