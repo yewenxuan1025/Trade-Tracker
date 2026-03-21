@@ -129,6 +129,7 @@ const App: React.FC = () => {
   }, []);
 
   // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
+  // Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
   useEffect(() => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
