@@ -12,7 +12,7 @@ import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, generateId, calculatePortfolioAnalysis } from './services/excelService';
-import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from './types';
+import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
 const STORAGE_KEY = 'trade_tracker_market_constants';
 const LOOKUP_DATA_KEY = 'trade_tracker_lookup_data';
@@ -30,7 +30,7 @@ const App: React.FC = () => {
   const { showToast } = useToast();
   const [lookupData, setLookupData] = useState<LookupSheetData | null>(() => {
     const saved = localStorage.getItem(LOOKUP_DATA_KEY);
-    if (saved) { try { const p = JSON.parse(saved); return { ...p, lastUpdated: new Date(p.lastUpdated) }; } catch(e){} }
+    if (saved) { try { const p = JSON.parse(saved); const result = { ...p, lastUpdated: new Date(p.lastUpdated) }; result.stocks = (result.stocks || []).map((s: StockData) => ({ ...s, ticker: padHkTicker(s.ticker, s.market) })); return result; } catch(e){} }
     return null;
   });
 
@@ -39,7 +39,7 @@ const App: React.FC = () => {
     if (!saved) return [];
     try {
         const parsed = JSON.parse(saved);
-        return parsed.map((t: any) => ({ ...t, id: t.id || generateId() }));
+        return parsed.map((t: any) => ({ ...t, id: t.id || generateId(), stock: padHkTicker(t.stock, t.market) }));
     } catch (e) { return []; }
   });
 
@@ -48,13 +48,13 @@ const App: React.FC = () => {
     if (!saved) return [];
     try {
         const parsed = JSON.parse(saved);
-        return parsed.map((t: any) => ({ ...t, id: t.id || generateId() }));
+        return parsed.map((t: any) => ({ ...t, id: t.id || generateId(), stock: padHkTicker(t.stock, t.market) }));
     } catch (e) { return []; }
   });
 
   const [pnlData, setPnlData] = useState<PnLData[]>(() => {
     const saved = localStorage.getItem(PNL_DATA_KEY);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? (JSON.parse(saved) as PnLData[]).map(p => ({ ...p, stock: padHkTicker(p.stock, p.market) })) : [];
   });
 
   const [navData, setNavData] = useState<NavData[]>(() => {
@@ -182,6 +182,11 @@ const App: React.FC = () => {
       setOptionTransactions(result.optionTransactions);
       setPnlData(result.pnl);
       setNavData(result.navData);
+      // Load benchmark if present in the uploaded file
+      if (result.benchmark && result.benchmark.length > 0) {
+        setBenchmarkData(result.benchmark);
+        showToast(`Loaded benchmark data: ${result.benchmark.length} days`, 'success');
+      }
       // Merge new income data (don't wipe existing)
       if (result.dividends.length > 0) setDividendData(result.dividends);
       if (result.interest.length > 0) setInterestData(result.interest);
@@ -612,7 +617,8 @@ const App: React.FC = () => {
         historyHk, historyNonHk,
         analysis.detailedHoldingsExport, analysis.weightedAvgs,
         navData, optionTransactions,
-        dividendData, interestData, cashLedger
+        dividendData, interestData, cashLedger,
+        benchmarkData
     );
   };
 

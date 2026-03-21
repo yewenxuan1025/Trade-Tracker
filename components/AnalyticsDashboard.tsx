@@ -113,7 +113,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark' | 'income'>('pnl');
   const [enlargedChart, setEnlargedChart] = useState<string | null>(null);
-  const [concentrationThreshold, setConcentrationThreshold] = useState(10);
+  const [concentrationThreshold, setConcentrationThreshold] = useState(5);
+  const [treemapEnlarged, setTreemapEnlarged] = useState(false);
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
   const [heatFreq, setHeatFreq] = useState<HeatFreq>('monthly');
@@ -505,25 +506,67 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   }, [navData, benchmarkData, availableIndices, blendWeights]);
 
   // ── P&L by dimension aggregation for donut charts ─────────────────────────────
+  // Build a normalised lookup map (case-insensitive ticker → stock info)
+  const lookupStockMap = useMemo(() => {
+    const m = new Map<string, { class: string; type: string; category: string }>();
+    (lookupData?.stocks || []).forEach(s => {
+      m.set(s.ticker.toUpperCase(), {
+        // Normalise class / type / category to title case to prevent double-counting
+        class: (s.class || 'Other').trim(),
+        type: (s.type || 'Other').trim(),
+        category: (s.category || 'Other').trim(),
+      });
+    });
+    return m;
+  }, [lookupData]);
+
   const portfolioByClass = useMemo(() => {
     const m = new Map<string, number>();
     group2Data.forEach((h: any) => {
-      const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (h.Stock || '').toUpperCase());
-      const cls = lookup?.class || 'Other';
-      m.set(cls, (m.get(cls) || 0) + (h.LastMV || 0));
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      // Normalise to lowercase for grouping to prevent "HK Stock" vs "HK stock"
+      const cls = info?.class || 'Other';
+      const key = cls.toLowerCase();
+      m.set(key, (m.get(key) || 0) + (h.LastMV || 0));
     });
-    return Array.from(m.entries()).map(([name, value]) => ({ name, value: Math.round(value) })).filter(x => x.value > 0);
-  }, [group2Data, lookupData]);
+    // Restore display-friendly names
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.class) nameMap.set(s.class.toLowerCase(), s.class.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
 
   const portfolioByType = useMemo(() => {
     const m = new Map<string, number>();
     group2Data.forEach((h: any) => {
-      const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (h.Stock || '').toUpperCase());
-      const tp = lookup?.type || 'Other';
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      const tp = (info?.type || 'Other').toLowerCase();
       m.set(tp, (m.get(tp) || 0) + (h.LastMV || 0));
     });
-    return Array.from(m.entries()).map(([name, value]) => ({ name, value: Math.round(value) })).filter(x => x.value > 0);
-  }, [group2Data, lookupData]);
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.type) nameMap.set(s.type.toLowerCase(), s.type.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
+
+  const portfolioByCategory = useMemo(() => {
+    const m = new Map<string, number>();
+    group2Data.forEach((h: any) => {
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      const cat = (info?.category || 'Other').toLowerCase();
+      m.set(cat, (m.get(cat) || 0) + (h.LastMV || 0));
+    });
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.category) nameMap.set(s.category.toLowerCase(), s.category.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
 
   const daysSince = (dateStr: string) => {
     if (!dateStr) return '-';
@@ -1089,6 +1132,9 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       className="w-16 text-xs border border-slate-200 rounded px-2 py-1 text-center"
                     />
                     <span className="text-xs text-slate-500">%</span>
+                    <button onClick={() => setTreemapEnlarged(true)} className="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors" title="Enlarge">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                    </button>
                   </div>
                 </div>
                 {(() => {
@@ -1163,83 +1209,75 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             )}
 
             {/* D3: Allocation Donuts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card>
-                <SectionHeader title="By Asset Class" info="Current portfolio allocation by asset class." icon={<PieChartIcon size={16} />} />
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={portfolioByClass}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      labelLine={false}
-                      fontSize={9}
-                    >
-                      {portfolioByClass.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Card>
-
-              <Card>
-                <SectionHeader title="By Investment Type" info="Current portfolio allocation by investment type." icon={<PieChartIcon size={16} />} />
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={portfolioByType}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      labelLine={false}
-                      fontSize={9}
-                    >
-                      {portfolioByType.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Card>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {[
+                { title: 'By Asset Class', info: 'Current portfolio allocation by asset class.', data: portfolioByClass },
+                { title: 'By Investment Type', info: 'Current portfolio allocation by investment type.', data: portfolioByType },
+                { title: 'By Category', info: 'Current portfolio allocation by category (Turnaround, Cyclical, Value, Growth).', data: portfolioByCategory },
+              ].map(({ title, info, data }) => (
+                <Card key={title}>
+                  <SectionHeader title={title} info={info} icon={<PieChartIcon size={16} />} />
+                  {data.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-8">No data — ensure lookup categories are set.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <PieChart>
+                        <Pie
+                          data={data}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={80}
+                          label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
+                          labelLine={false}
+                          fontSize={9}
+                        >
+                          {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </Card>
+              ))}
             </div>
 
             {/* D4: Last Price / Avg Cost Ratio Charts */}
             {(() => {
               const PriceRatioChart = ({ data, label, chartId }: { data: any[], label: string, chartId: string }) => {
                 if (!data.length) return null;
-                const h = Math.max(200, data.length * 28 + 60);
+                const barW = Math.max(24, Math.min(60, 600 / data.length));
+                const chartW = Math.max(400, data.length * (barW + 8) + 80);
                 return (
                   <Card>
                     <div className="flex items-center justify-between mb-3">
-                      <SectionHeader title={`Last / Cost — ${label}`} info="Ratio > 1 = profit (green), < 1 = loss (red). Sorted largest to smallest." icon={<Target size={16} />} />
+                      <SectionHeader title={`Last / Cost — ${label}`} info="Ratio > 1 = profit (red), < 1 = loss (green). Reference line at 1× (break-even). Sorted largest to smallest." icon={<Target size={16} />} />
                       <button onClick={() => setEnlargedChart(chartId)} className="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors" title="Enlarge">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
                       </button>
                     </div>
-                    <ResponsiveContainer width="100%" height={h}>
-                      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 40 }}>
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                        <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={v => v.toFixed(1)} domain={[0, 'auto']} />
-                        <YAxis type="category" dataKey="ticker" tick={{ fontSize: 10 }} width={55} />
-                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }} />
-                        <ReferenceLine x={1} stroke="#94a3b8" strokeDasharray="4 4" />
-                        <Bar dataKey="ratio" radius={[0, 3, 3, 0]}>
-                          {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#10b981' : '#ef4444'} />)}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                    <div className="overflow-x-auto">
+                      <div style={{ width: `${chartW}px`, height: '260px' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={data} margin={{ top: 20, right: 16, bottom: 40, left: 40 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis dataKey="ticker" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" height={50} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={[0, 'auto']} />
+                            <Tooltip
+                              formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']}
+                              labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }}
+                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }}
+                            />
+                            <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 9, fill: '#94a3b8' }} />
+                            <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 0, 0]}>
+                              {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
                   </Card>
                 );
               };
@@ -1642,6 +1680,53 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         })()}
       </div>
 
+      {/* Treemap Lightbox */}
+      {treemapEnlarged && (() => {
+        const treemapData = group2Data
+          .filter((h: any) => (h.LastMV || 0) > 0)
+          .map((h: any) => ({ name: h.Stock, size: Math.abs(h.LastMV || 0), mvPct: (h.MVPct || 0) * 100 }));
+        const totalMv = treemapData.reduce((a: number, b: any) => a + b.size, 0);
+        const withPct = treemapData.map((d: any) => ({
+          ...d,
+          mvPct: d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0),
+          isOver: (d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0)) > concentrationThreshold,
+        }));
+        return (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setTreemapEnlarged(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl p-6 w-[90vw] h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-slate-800">Concentration Risk — threshold {concentrationThreshold}%</h3>
+                <button onClick={() => setTreemapEnlarged(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"><X size={18} /></button>
+              </div>
+              <div className="flex-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <Treemap
+                    data={withPct}
+                    dataKey="size"
+                    aspectRatio={16 / 9}
+                    content={({ x, y, width, height, name, mvPct, isOver }: any) => {
+                      if (!name || width <= 0 || height <= 0) return <g />;
+                      const fill = isOver ? '#ef4444' : '#6366f1';
+                      const showName = width > 28 && height > 18;
+                      const showPct = width > 28 && height > 32;
+                      const midY = y + height / 2;
+                      const pctLabel = typeof mvPct === 'number' ? mvPct.toFixed(1) + '%' : '';
+                      return (
+                        <g>
+                          <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.85} stroke="#fff" strokeWidth={1.5} rx={3} />
+                          {showName && <text x={x + width / 2} y={showPct ? midY - 7 : midY} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={Math.min(Math.max(width / ((name?.length || 1) + 1) * 1.5, 8), 14)} fontWeight="600">{name}</text>}
+                          {showPct && pctLabel && <text x={x + width / 2} y={midY + 9} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.85)" fontSize={10}>{pctLabel}</text>}
+                        </g>
+                      );
+                    }}
+                  />
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Chart Lightbox */}
       {enlargedChart && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setEnlargedChart(null)}>
@@ -1656,20 +1741,25 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               const chartDataMap: Record<string, any[]> = { 'ratio-hk': priceRatioCharts.hk, 'ratio-ccs': priceRatioCharts.ccs, 'ratio-us': priceRatioCharts.us, 'ratio-aus': priceRatioCharts.aus };
               const data = chartDataMap[enlargedChart] || [];
               if (!data.length) return <p className="text-slate-400 text-sm text-center py-8">No data</p>;
-              const h = Math.max(300, data.length * 30 + 80);
+              const barW = Math.max(20, Math.min(60, 900 / data.length));
+              const chartW = Math.max(600, data.length * (barW + 8) + 100);
               return (
-                <ResponsiveContainer width="100%" height={h}>
-                  <BarChart data={data} layout="vertical" margin={{ top: 0, right: 60, bottom: 0, left: 60 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                    <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => v.toFixed(1)} domain={[0, 'auto']} />
-                    <YAxis type="category" dataKey="ticker" tick={{ fontSize: 11 }} width={65} />
-                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
-                    <ReferenceLine x={1} stroke="#94a3b8" strokeDasharray="4 4" />
-                    <Bar dataKey="ratio" radius={[0, 4, 4, 0]}>
-                      {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#10b981' : '#ef4444'} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="overflow-x-auto">
+                  <div style={{ width: `${chartW}px`, height: '400px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={data} margin={{ top: 20, right: 20, bottom: 50, left: 50 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <XAxis dataKey="ticker" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" height={55} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={[0, 'auto']} />
+                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
+                        <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
+                        <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 0, 0]}>
+                          {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
               );
             })()}
           </div>

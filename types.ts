@@ -262,6 +262,16 @@ export const NAV_HEADER_MAP: Record<string, keyof NavData> = {
   'NAV2': 'nav2'
 };
 
+// HK ticker normalisation: pad numeric tickers to 4 digits (e.g. "297" → "0297")
+export const padHkTicker = (ticker: string, market?: string): string => {
+  if (!ticker) return ticker;
+  const m = (market || '').toUpperCase().trim();
+  if (m === 'HK' && /^\d+$/.test(ticker) && ticker.length < 4) {
+    return ticker.padStart(4, '0');
+  }
+  return ticker;
+};
+
 // Dropdown Options
 export const TYPE_OPTIONS = ['Trading', 'Long-Term', 'Event', 'Allocation'];
 export const CATEGORY_OPTIONS = ['Cyclical', 'Value', 'Growth', 'Turnaround'];
