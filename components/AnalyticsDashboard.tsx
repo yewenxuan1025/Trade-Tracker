@@ -112,7 +112,9 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   onIncomeUpload,
 }) => {
   const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark' | 'income'>('pnl');
-  const [concentrationThreshold, setConcentrationThreshold] = useState(10);
+  const [enlargedChart, setEnlargedChart] = useState<string | null>(null);
+  const [concentrationThreshold, setConcentrationThreshold] = useState(5);
+  const [treemapEnlarged, setTreemapEnlarged] = useState(false);
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
   const [heatFreq, setHeatFreq] = useState<HeatFreq>('monthly');
@@ -437,21 +439,19 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return all;
   }, [portfolioAnalysis]);
 
-  // ── scatter data for cost vs price ────────────────────────────────────────────
-  const scatterData = useMemo(() => {
-    return group2Data
-      .filter((h: any) => (h.LastMV || 0) > 0)
-      .map((h: any) => ({
-        name: h.Stock,
-        cost: h.AvgCost,
-        price: h.LastPrice,
-        mv: h.LastMV,
-        pnlPct: (h.PnLPct || 0) * 100,
-      }));
-  }, [group2Data]);
-
-  const scatterMin = scatterData.length ? Math.min(...scatterData.map((d: any) => Math.min(d.cost, d.price))) * 0.9 : 0;
-  const scatterMax = scatterData.length ? Math.max(...scatterData.map((d: any) => Math.max(d.cost, d.price))) * 1.1 : 100;
+  // ── price ratio charts (Last Price / Avg Cost per market) ─────────────────────
+  const priceRatioCharts = useMemo(() => {
+    const toBar = (arr: any[]) =>
+      arr.filter((h: any) => (h.AvgCost || 0) > 0 && (h.LastPrice || 0) > 0)
+        .map((h: any) => ({ ticker: h.Stock, name: h.Name || h.Stock, ratio: h.LastPrice / h.AvgCost }))
+        .sort((a: any, b: any) => b.ratio - a.ratio);
+    return {
+      hk: toBar(portfolioAnalysis.g2Hk || []),
+      ccs: toBar(portfolioAnalysis.g2Ccs || []),
+      us: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS')),
+      aus: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() === 'AUS')),
+    };
+  }, [portfolioAnalysis]);
 
   // ── normalizedNav (multi-index + blend) ───────────────────────────────────
   const normalizedNav = useMemo(() => {
@@ -506,25 +506,67 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   }, [navData, benchmarkData, availableIndices, blendWeights]);
 
   // ── P&L by dimension aggregation for donut charts ─────────────────────────────
+  // Build a normalised lookup map (case-insensitive ticker → stock info)
+  const lookupStockMap = useMemo(() => {
+    const m = new Map<string, { class: string; type: string; category: string }>();
+    (lookupData?.stocks || []).forEach(s => {
+      m.set(s.ticker.toUpperCase(), {
+        // Normalise class / type / category to title case to prevent double-counting
+        class: (s.class || 'Other').trim(),
+        type: (s.type || 'Other').trim(),
+        category: (s.category || 'Other').trim(),
+      });
+    });
+    return m;
+  }, [lookupData]);
+
   const portfolioByClass = useMemo(() => {
     const m = new Map<string, number>();
     group2Data.forEach((h: any) => {
-      const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (h.Stock || '').toUpperCase());
-      const cls = lookup?.class || 'Other';
-      m.set(cls, (m.get(cls) || 0) + (h.LastMV || 0));
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      // Normalise to lowercase for grouping to prevent "HK Stock" vs "HK stock"
+      const cls = info?.class || 'Other';
+      const key = cls.toLowerCase();
+      m.set(key, (m.get(key) || 0) + (h.LastMV || 0));
     });
-    return Array.from(m.entries()).map(([name, value]) => ({ name, value: Math.round(value) })).filter(x => x.value > 0);
-  }, [group2Data, lookupData]);
+    // Restore display-friendly names
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.class) nameMap.set(s.class.toLowerCase(), s.class.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
 
   const portfolioByType = useMemo(() => {
     const m = new Map<string, number>();
     group2Data.forEach((h: any) => {
-      const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (h.Stock || '').toUpperCase());
-      const tp = lookup?.type || 'Other';
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      const tp = (info?.type || 'Other').toLowerCase();
       m.set(tp, (m.get(tp) || 0) + (h.LastMV || 0));
     });
-    return Array.from(m.entries()).map(([name, value]) => ({ name, value: Math.round(value) })).filter(x => x.value > 0);
-  }, [group2Data, lookupData]);
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.type) nameMap.set(s.type.toLowerCase(), s.type.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
+
+  const portfolioByCategory = useMemo(() => {
+    const m = new Map<string, number>();
+    group2Data.forEach((h: any) => {
+      const info = lookupStockMap.get((h.Stock || '').toUpperCase());
+      const cat = (info?.category || 'Other').toLowerCase();
+      m.set(cat, (m.get(cat) || 0) + (h.LastMV || 0));
+    });
+    const nameMap = new Map<string, string>();
+    (lookupData?.stocks || []).forEach(s => { if (s.category) nameMap.set(s.category.toLowerCase(), s.category.trim()); });
+    return Array.from(m.entries())
+      .map(([key, value]) => ({ name: nameMap.get(key) || key, value: Math.round(value) }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [group2Data, lookupStockMap, lookupData]);
 
   const daysSince = (dateStr: string) => {
     if (!dateStr) return '-';
@@ -842,138 +884,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </Card>
             </div>
 
-            {/* A1: Cumulative P&L + Drawdown */}
-            <Card>
-              <SectionHeader
-                title="Cumulative P&L & Drawdown"
-                info="Cumulative realized P&L in USD over time. The red area shows the drawdown from peak."
-                icon={<TrendingUp size={16} />}
-              />
-              <ResponsiveContainer width="100%" height={280}>
-                <ComposedChart data={cumulativeData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                  <YAxis
-                    yAxisId="left"
-                    tickFormatter={v => `$${v >= 1000 ? Math.round(v / 1000) + 'k' : v}`}
-                    tick={{ fontSize: 10 }}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tickFormatter={v => `${v}%`}
-                    tick={{ fontSize: 10 }}
-                  />
-                  <Tooltip
-                    content={({ payload, label }: any) => (
-                      <div className="bg-white border border-slate-200 p-2 rounded shadow text-xs">
-                        <p className="font-bold text-slate-700">{label}</p>
-                        {payload?.map((e: any) => (
-                          <p key={e.dataKey} style={{ color: e.color }}>
-                            {e.name}: {e.dataKey === 'drawdown' ? `${e.value}%` : `$${e.value?.toLocaleString()}`}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '11px' }} />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="pnl"
-                    name="Cumulative P&L"
-                    stroke="#2563eb"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  <Area
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="drawdown"
-                    name="Drawdown %"
-                    stroke="#ef4444"
-                    fill="#fecaca"
-                    fillOpacity={0.6}
-                    dot={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </Card>
-
-            {/* A2: P&L Heatmap with frequency selector */}
-            <Card>
-              <div className="flex items-center justify-between mb-3">
-                <SectionHeader
-                  title="P&L Heatmap"
-                  info="P&L grouped by the selected frequency. Green = profit, Red = loss. Darker = larger magnitude. Second line = % of annual total."
-                  icon={<BarChart3 size={16} />}
-                />
-                {/* Frequency selector */}
-                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-                  {(['weekly', 'monthly', 'quarterly', 'annual'] as HeatFreq[]).map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setHeatFreq(f)}
-                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-colors capitalize ${
-                        heatFreq === f ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {heatmapYears.length === 0 ? (
-                <p className="text-slate-400 text-sm text-center py-8">No data available</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <div className={heatFreq === 'weekly' ? 'min-w-[900px]' : 'min-w-[400px]'}>
-                    {/* Column headers */}
-                    <div
-                      className="grid gap-1 mb-1"
-                      style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
-                    >
-                      <div />
-                      {heatmapColumns.map(col => (
-                        <div key={col} className="text-[9px] text-slate-400 text-center truncate">{col}</div>
-                      ))}
-                    </div>
-                    {heatmapYears.map(year => (
-                      <div
-                        key={year}
-                        className="grid gap-1 mb-1"
-                        style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
-                      >
-                        <div className="text-[9px] text-slate-500 flex items-center pr-2">{year}</div>
-                        {heatmapColumns.map((col, idx) => {
-                          const key = getHeatKey(year, col, idx);
-                          const data = heatmapData.get(key);
-                          const val = data?.total || 0;
-                          return (
-                            <div
-                              key={col}
-                              title={data ? `${key}: $${Math.round(val).toLocaleString()} (${data.count} trades)` : key}
-                              className="h-10 rounded cursor-default flex flex-col items-center justify-center text-[9px] font-bold leading-tight"
-                              style={{
-                                backgroundColor: heatColor(val),
-                                color: Math.abs(val) / maxAbsHeat > 0.5 ? 'white' : '#374151',
-                              }}
-                            >
-                              {data ? (
-                                <>
-                                  <span>{val > 0 ? '+' : ''}{Math.round(val / 1000)}k</span>
-                                  <span className="text-[7px] opacity-80">{data.pct > 0 ? '+' : ''}{data.pct.toFixed(0)}%</span>
-                                </>
-                              ) : ''}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Card>
           </>
         )}
 
@@ -1222,6 +1132,9 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       className="w-16 text-xs border border-slate-200 rounded px-2 py-1 text-center"
                     />
                     <span className="text-xs text-slate-500">%</span>
+                    <button onClick={() => setTreemapEnlarged(true)} className="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors" title="Enlarge">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                    </button>
                   </div>
                 </div>
                 {(() => {
@@ -1296,118 +1209,87 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             )}
 
             {/* D3: Allocation Donuts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card>
-                <SectionHeader title="By Asset Class" info="Current portfolio allocation by asset class." icon={<PieChartIcon size={16} />} />
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={portfolioByClass}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      labelLine={false}
-                      fontSize={9}
-                    >
-                      {portfolioByClass.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Card>
-
-              <Card>
-                <SectionHeader title="By Investment Type" info="Current portfolio allocation by investment type." icon={<PieChartIcon size={16} />} />
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={portfolioByType}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      labelLine={false}
-                      fontSize={9}
-                    >
-                      {portfolioByType.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Card>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {[
+                { title: 'By Asset Class', info: 'Current portfolio allocation by asset class.', data: portfolioByClass },
+                { title: 'By Investment Type', info: 'Current portfolio allocation by investment type.', data: portfolioByType },
+                { title: 'By Category', info: 'Current portfolio allocation by category (Turnaround, Cyclical, Value, Growth).', data: portfolioByCategory },
+              ].map(({ title, info, data }) => (
+                <Card key={title}>
+                  <SectionHeader title={title} info={info} icon={<PieChartIcon size={16} />} />
+                  {data.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-8">No data — ensure lookup categories are set.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <PieChart>
+                        <Pie
+                          data={data}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={80}
+                          label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
+                          labelLine={false}
+                          fontSize={9}
+                        >
+                          {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={(v: any) => `$${Math.round(v).toLocaleString()}`} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </Card>
+              ))}
             </div>
 
-            {/* D4: Cost vs Price Scatter */}
-            {scatterData.length > 0 && (
-              <Card>
-                <SectionHeader
-                  title="Cost vs Last Price"
-                  info="Each dot is a current holding. X=avg cost, Y=last price, size=market value. Above diagonal = profit."
-                  icon={<Target size={16} />}
-                />
-                <ResponsiveContainer width="100%" height={320}>
-                  <ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="cost"
-                      name="Avg Cost"
-                      type="number"
-                      domain={['auto', 'auto']}
-                      tickFormatter={v => `$${v}`}
-                      tick={{ fontSize: 10 }}
-                      label={{ value: 'Avg Cost', position: 'bottom', fontSize: 10 }}
-                    />
-                    <YAxis
-                      dataKey="price"
-                      name="Last Price"
-                      type="number"
-                      domain={['auto', 'auto']}
-                      tickFormatter={v => `$${v}`}
-                      tick={{ fontSize: 10 }}
-                      label={{ value: 'Last Price', angle: -90, position: 'insideLeft', fontSize: 10 }}
-                    />
-                    <ZAxis dataKey="mv" range={[40, 800]} name="Market Value" />
-                    <Tooltip
-                      cursor={{ strokeDasharray: '3 3' }}
-                      content={({ payload }: any) => {
-                        if (!payload?.length) return null;
-                        const d = payload[0].payload;
-                        return (
-                          <div className="bg-white border border-slate-200 p-2 rounded shadow text-xs">
-                            <p className="font-bold">{d.name}</p>
-                            <p>Avg Cost: ${d.cost?.toFixed(2)}</p>
-                            <p>Last Price: ${d.price?.toFixed(2)}</p>
-                            <p>MV: ${Math.round(d.mv).toLocaleString()}</p>
-                            <p style={{ color: d.pnlPct >= 0 ? '#ef4444' : '#10b981' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
-                          </div>
-                        );
-                      }}
-                    />
-                    <Scatter data={scatterData} fill="#6366f1">
-                      {scatterData.map((d: any, i: number) => (
-                        <Cell key={i} fill={d.pnlPct >= 0 ? '#ef4444' : '#10b981'} fillOpacity={0.7} />
-                      ))}
-                    </Scatter>
-                    <ReferenceLine
-                      stroke="#94a3b8"
-                      strokeDasharray="5 5"
-                      segment={[{ x: scatterMin, y: scatterMin }, { x: scatterMax, y: scatterMax }]}
-                    />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </Card>
-            )}
+            {/* D4: Last Price / Avg Cost Ratio Charts */}
+            {(() => {
+              const PriceRatioChart = ({ data, label, chartId }: { data: any[], label: string, chartId: string }) => {
+                if (!data.length) return null;
+                const barW = Math.max(24, Math.min(60, 600 / data.length));
+                const chartW = Math.max(400, data.length * (barW + 8) + 80);
+                return (
+                  <Card>
+                    <div className="flex items-center justify-between mb-3">
+                      <SectionHeader title={`Last / Cost — ${label}`} info="Ratio > 1 = profit (red), < 1 = loss (green). Reference line at 1× (break-even). Sorted largest to smallest." icon={<Target size={16} />} />
+                      <button onClick={() => setEnlargedChart(chartId)} className="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors" title="Enlarge">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <div style={{ width: `${chartW}px`, height: '260px' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={data} margin={{ top: 20, right: 16, bottom: 40, left: 40 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis dataKey="ticker" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" height={50} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={[0, 'auto']} />
+                            <Tooltip
+                              formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']}
+                              labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }}
+                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }}
+                            />
+                            <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 9, fill: '#94a3b8' }} />
+                            <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 0, 0]}>
+                              {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              };
+              return (
+                <>
+                  <PriceRatioChart data={priceRatioCharts.hk} label="HK" chartId="ratio-hk" />
+                  <PriceRatioChart data={priceRatioCharts.ccs} label="CCS" chartId="ratio-ccs" />
+                  <PriceRatioChart data={priceRatioCharts.us} label="US" chartId="ratio-us" />
+                  <PriceRatioChart data={priceRatioCharts.aus} label="AUS" chartId="ratio-aus" />
+                </>
+              );
+            })()}
 
             {/* D5: Expectancy & Kelly */}
             <Card>
@@ -1797,6 +1679,92 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           );
         })()}
       </div>
+
+      {/* Treemap Lightbox */}
+      {treemapEnlarged && (() => {
+        const treemapData = group2Data
+          .filter((h: any) => (h.LastMV || 0) > 0)
+          .map((h: any) => ({ name: h.Stock, size: Math.abs(h.LastMV || 0), mvPct: (h.MVPct || 0) * 100 }));
+        const totalMv = treemapData.reduce((a: number, b: any) => a + b.size, 0);
+        const withPct = treemapData.map((d: any) => ({
+          ...d,
+          mvPct: d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0),
+          isOver: (d.mvPct || (totalMv > 0 ? (d.size / totalMv) * 100 : 0)) > concentrationThreshold,
+        }));
+        return (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setTreemapEnlarged(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl p-6 w-[90vw] h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-slate-800">Concentration Risk — threshold {concentrationThreshold}%</h3>
+                <button onClick={() => setTreemapEnlarged(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"><X size={18} /></button>
+              </div>
+              <div className="flex-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <Treemap
+                    data={withPct}
+                    dataKey="size"
+                    aspectRatio={16 / 9}
+                    content={({ x, y, width, height, name, mvPct, isOver }: any) => {
+                      if (!name || width <= 0 || height <= 0) return <g />;
+                      const fill = isOver ? '#ef4444' : '#6366f1';
+                      const showName = width > 28 && height > 18;
+                      const showPct = width > 28 && height > 32;
+                      const midY = y + height / 2;
+                      const pctLabel = typeof mvPct === 'number' ? mvPct.toFixed(1) + '%' : '';
+                      return (
+                        <g>
+                          <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.85} stroke="#fff" strokeWidth={1.5} rx={3} />
+                          {showName && <text x={x + width / 2} y={showPct ? midY - 7 : midY} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={Math.min(Math.max(width / ((name?.length || 1) + 1) * 1.5, 8), 14)} fontWeight="600">{name}</text>}
+                          {showPct && pctLabel && <text x={x + width / 2} y={midY + 9} textAnchor="middle" dominantBaseline="middle" fill="rgba(255,255,255,0.85)" fontSize={10}>{pctLabel}</text>}
+                        </g>
+                      );
+                    }}
+                  />
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Chart Lightbox */}
+      {enlargedChart && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setEnlargedChart(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[85vw] max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-800 text-sm">
+                {enlargedChart === 'ratio-hk' ? 'Last / Cost — HK' : enlargedChart === 'ratio-ccs' ? 'Last / Cost — CCS' : enlargedChart === 'ratio-us' ? 'Last / Cost — US' : enlargedChart === 'ratio-aus' ? 'Last / Cost — AUS' : enlargedChart}
+              </h3>
+              <button onClick={() => setEnlargedChart(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"><X size={18} /></button>
+            </div>
+            {(() => {
+              const chartDataMap: Record<string, any[]> = { 'ratio-hk': priceRatioCharts.hk, 'ratio-ccs': priceRatioCharts.ccs, 'ratio-us': priceRatioCharts.us, 'ratio-aus': priceRatioCharts.aus };
+              const data = chartDataMap[enlargedChart] || [];
+              if (!data.length) return <p className="text-slate-400 text-sm text-center py-8">No data</p>;
+              const barW = Math.max(20, Math.min(60, 900 / data.length));
+              const chartW = Math.max(600, data.length * (barW + 8) + 100);
+              return (
+                <div className="overflow-x-auto">
+                  <div style={{ width: `${chartW}px`, height: '400px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={data} margin={{ top: 20, right: 20, bottom: 50, left: 50 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <XAxis dataKey="ticker" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" height={55} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={[0, 'auto']} />
+                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
+                        <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
+                        <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 0, 0]}>
+                          {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,12 +1,13 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { PnLData, MarketConstants } from '../types';
+import { PnLData, MarketConstants, LookupSheetData } from '../types';
 import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 interface PnLTableProps {
   data: PnLData[];
   marketConstants?: MarketConstants;
+  lookupData?: LookupSheetData | null;
   onUpload: (file: File) => void;
   onExport: (filteredData: PnLData[]) => void;
   onEditRecord: (id: string, updated: Partial<PnLData>) => void;
@@ -32,8 +33,8 @@ const initialFilters: FilterState = {
   minDays: '', maxDays: '', minPnL: '', maxPnL: '', minPct: '', maxPct: ''
 };
 
-const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, onExport, onEditRecord, onDeleteRecord }) => {
-  const [targetStartDate, setTargetStartDate] = useState('');
+const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, onUpload, onExport, onEditRecord, onDeleteRecord }) => {
+  const [targetStartDate, setTargetStartDate] = useState('2024-04-23');
   const [targetEndDate, setTargetEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [targetProfitPct, setTargetProfitPct] = useState(25);
   const [targetLossPct, setTargetLossPct] = useState(10);
@@ -51,22 +52,6 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
   const [stockFilters, setStockFilters] = useState<FilterState>(initialFilters);
   const [optionFilters, setOptionFilters] = useState<FilterState>(initialFilters);
 
-  // Initialize Date Range from Data
-  useEffect(() => {
-    if (data.length > 0) {
-        const dates = data.map(d => d.sellDate).filter(d => d).sort();
-        if (dates.length > 0) {
-            const minDate = dates[0];
-            if (!targetStartDate || minDate < targetStartDate) {
-                setTargetStartDate(minDate);
-            }
-        } else if (!targetStartDate) {
-             setTargetStartDate('2020-01-01');
-        }
-    } else if (!targetStartDate) {
-        setTargetStartDate('2020-01-01');
-    }
-  }, [data]);
 
   // Separate State for Stock and Option tables
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
@@ -90,8 +75,10 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
   };
 
   const { stockPnl, optionPnl, aggregatedSummary } = useMemo(() => {
-    const stocks = data.filter(r => !r.option || !['Call', 'Put'].includes(r.option));
-    const options = data.filter(r => r.option && ['Call', 'Put'].includes(r.option));
+    const lookupMap = new Map<string, string>((lookupData?.stocks || []).map(s => [s.ticker.toUpperCase(), s.companyName]));
+    const enrich = (r: PnLData): PnLData => (!r.name && r.stock ? { ...r, name: lookupMap.get(r.stock.toUpperCase()) || r.stock } : r);
+    const stocks = data.filter(r => !r.option || !['Call', 'Put'].includes(r.option)).map(enrich);
+    const options = data.filter(r => r.option && ['Call', 'Put'].includes(r.option)).map(enrich);
     
     // Aggregated Summary Calculation (converted to USD)
     const all = [...stocks, ...options];
@@ -338,6 +325,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
               {isOption && <HeaderCell label="Option" field="option" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Strike" field="strike" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Exp" field="expiration" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {isOption && <th className="px-3 py-3 text-left text-[10px] font-extrabold text-slate-500 uppercase tracking-wider whitespace-nowrap border-b border-slate-200">Action</th>}
               <HeaderCell label="Name" field="name" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Mkt" field="market" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Qty" field="quantity" sortConfig={sortConfig} setSortConfig={setSortConfig} />
@@ -367,6 +355,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, onUpload, on
                 {isOption && <td className="px-3 py-2 text-[10px] text-purple-600 font-bold">{r.option}</td>}
                 {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-600">{r.strike}</td>}
                 {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.expiration}</td>}
+                {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{(r as any).optionAction || ''}</td>}
                 <td className="px-3 py-2 text-[10px] text-slate-600 truncate">{r.name}</td>
                 <td className="px-3 py-2 text-[10px] text-slate-400">{r.market}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs">{r.quantity.toLocaleString()}</td>

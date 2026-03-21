@@ -81,7 +81,7 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
   };
 
   const handleEdit = (stock: StockData & { originalIndex: number }) => {
-      setEditingStock(stock);
+      setEditingStock({ ...stock, class: stock.class || 'US Stock' });
       setEditingIndex(stock.originalIndex);
       setIsEditModalOpen(true);
   };
@@ -237,7 +237,7 @@ const StockTable: React.FC<StockTableProps> = ({ stocks, onStockAdd, onStockEdit
                 <div className="border-t border-slate-100 pt-4">
                     <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Financial Metrics</h4>
                     <div className="grid grid-cols-4 gap-4">
-                        <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Close Price</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-mono" value={editingStock.closePrice} onChange={e => setEditingStock({...editingStock, closePrice: parseFloat(e.target.value) || 0})}/></div>
+                        <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Close Price</label><input type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-mono" value={editingStock.closePrice} onChange={e => setEditingStock({...editingStock, closePrice: parseFloat(e.target.value) || 0})}/></div>
                         <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Market Cap</label><input type="number" step="1" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-mono" value={editingStock.marketCap} onChange={e => setEditingStock({...editingStock, marketCap: parseFloat(e.target.value) || 0})}/></div>
                         <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">PE (TTM)</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-mono" value={editingStock.peTTM} onChange={e => setEditingStock({...editingStock, peTTM: parseFloat(e.target.value) || 0})}/></div>
                         <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">PB</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-mono" value={editingStock.pb} onChange={e => setEditingStock({...editingStock, pb: parseFloat(e.target.value) || 0})}/></div>

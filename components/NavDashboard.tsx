@@ -1,9 +1,26 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent, Upload, Calendar } from 'lucide-react';
+import { Plus, Edit2, Save, X, Trash2, TrendingUp, Upload, Calendar, Expand } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import { NavData } from '../types';
 import { generateId } from '../services/excelService';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
+
+type NavHeatFreq = 'weekly' | 'monthly' | 'quarterly' | 'annual';
+
+const getNavFreqKey = (dateStr: string, freq: NavHeatFreq): string => {
+  const d = new Date(dateStr.replace(/\//g, '-'));
+  if (isNaN(d.getTime())) return '';
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  if (freq === 'annual') return `${year}`;
+  if (freq === 'quarterly') return `${year}-Q${Math.floor(month / 3) + 1}`;
+  if (freq === 'weekly') {
+    const startOfYear = new Date(year, 0, 1);
+    const week = Math.ceil((((d.getTime() - startOfYear.getTime()) / 86400000) + startOfYear.getDay() + 1) / 7);
+    return `${year}-W${String(Math.min(week, 52)).padStart(2, '0')}`;
+  }
+  return `${year}-${String(month + 1).padStart(2, '0')}`;
+};
 
 interface NavDashboardProps {
   data: NavData[];
@@ -19,6 +36,8 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState(new Date().toISOString().split('T')[0]);
+  const [navHeatFreq, setNavHeatFreq] = useState<NavHeatFreq>('monthly');
+  const [heatmapEnlarged, setHeatmapEnlarged] = useState(false);
 
   const sortedData = useMemo(() => {
     return [...data].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -113,6 +132,52 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
     cumulativeReturn: item.cumulativeReturn * 100 // Convert to %
   }));
 
+  // NAV-based Cumulative Return & Drawdown (simple return from base NAV)
+  const navReturnData = useMemo(() => {
+    if (sortedData.length === 0) return [];
+    const base = sortedData[0].nav1 || sortedData[0].nav2 || 1;
+    let peakNav = base;
+    return sortedData.map(n => {
+      const nav = n.nav1 || n.nav2 || base;
+      peakNav = Math.max(peakNav, nav);
+      return {
+        date: n.date,
+        cumReturn: parseFloat(((nav - base) / base * 100).toFixed(2)),
+        drawdown: parseFloat(((nav - peakNav) / peakNav * 100).toFixed(2)),
+      };
+    });
+  }, [sortedData]);
+
+  // NAV-based Heatmap (frequency-aware, date-format-safe)
+  const navHeatmap = useMemo(() => {
+    if (sortedData.length === 0) return { cells: [], years: [], columns: [] };
+    const periodMap = new Map<string, { first: number; last: number }>();
+    sortedData.forEach(n => {
+      const key = getNavFreqKey(n.date, navHeatFreq);
+      if (!key) return;
+      const nav = n.nav1 || n.nav2 || 1;
+      if (!periodMap.has(key)) periodMap.set(key, { first: nav, last: nav });
+      else periodMap.get(key)!.last = nav;
+    });
+    const cells: Array<{ year: string; col: string; ret: number }> = [];
+    periodMap.forEach(({ first, last }, key) => {
+      const ret = first !== 0 ? parseFloat(((last - first) / first * 100).toFixed(2)) : 0;
+      // Derive year: everything before first '-' after 4th char
+      const year = key.substring(0, 4);
+      const col = navHeatFreq === 'annual' ? 'Annual' : key.substring(5); // e.g. '10', 'Q3', 'W42'
+      cells.push({ year, col, ret });
+    });
+    const years = [...new Set(cells.map(c => c.year))].filter(y => /^\d{4}$/.test(y)).sort();
+    let columns: string[];
+    if (navHeatFreq === 'monthly') columns = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    else if (navHeatFreq === 'quarterly') columns = ['Q1','Q2','Q3','Q4'];
+    else if (navHeatFreq === 'annual') columns = ['Annual'];
+    else columns = Array.from({ length: 52 }, (_, i) => `W${String(i + 1).padStart(2, '0')}`);
+    return { cells, years, columns };
+  }, [sortedData, navHeatFreq]);
+
+  const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Charts Section */}
@@ -135,8 +200,8 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                 <Tooltip 
                     contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
                     formatter={(value: number, name: string) => [
-                        name === 'cumulativeReturn' ? `${value.toFixed(2)}%` : `$${value.toLocaleString()}`,
-                        name === 'cumulativeReturn' ? 'Cumulative Return' : 'AUM'
+                        name === 'Cumulative Return' ? `${value.toFixed(2)}%` : `$${value.toLocaleString()}`,
+                        name
                     ]}
                 />
                 <Legend />
@@ -189,6 +254,134 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
             </div>
         </div>
       </div>
+
+      {/* NAV Cumulative Return & Drawdown */}
+      {navReturnData.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-600" /> Cumulative Return & Drawdown (NAV)</h3>
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={navReturnData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: 11 }} formatter={(v: any, name: string) => [`${Number(v).toFixed(2)}%`, name]} />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Line yAxisId="left" type="monotone" dataKey="cumReturn" name="Cumulative Return" stroke="#2563eb" strokeWidth={2} dot={false} />
+                <Area yAxisId="right" type="monotone" dataKey="drawdown" name="Drawdown %" stroke="#ef4444" fill="#fecaca" fillOpacity={0.5} dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* NAV Return Heatmap */}
+      {navHeatmap.years.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-800">Return Heatmap (NAV)</h3>
+            <div className="flex items-center gap-2">
+              {(['weekly','monthly','quarterly','annual'] as NavHeatFreq[]).map(f => (
+                <button key={f} onClick={() => setNavHeatFreq(f)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${navHeatFreq === f ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+              <button onClick={() => setHeatmapEnlarged(true)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600" title="Enlarge">
+                <Expand size={14} />
+              </button>
+            </div>
+          </div>
+          {(() => {
+            const absMax = Math.max(...navHeatmap.cells.map(c => Math.abs(c.ret)), 1);
+            const cellBg = (ret: number, hasData: boolean) => {
+              if (!hasData) return '#f1f5f9';
+              const intensity = Math.min(Math.abs(ret) / absMax, 1);
+              // red = profit, green = loss (app color semantics)
+              return ret >= 0
+                ? `rgba(239,68,68,${0.15 + intensity * 0.65})`
+                : `rgba(16,185,129,${0.15 + intensity * 0.65})`;
+            };
+            const colLabels = navHeatFreq === 'monthly' ? MONTH_LABELS : navHeatmap.columns;
+            const numCols = navHeatmap.columns.length;
+            return (
+              <div className="overflow-x-auto">
+                <div style={{ minWidth: numCols > 12 ? `${numCols * 28 + 60}px` : '500px' }}>
+                  <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: `60px repeat(${numCols}, 1fr)` }}>
+                    <div />
+                    {colLabels.map(l => <div key={l} className="text-[9px] text-slate-400 text-center">{l}</div>)}
+                  </div>
+                  {navHeatmap.years.map(year => (
+                    <div key={year} className="grid gap-1 mb-1" style={{ gridTemplateColumns: `60px repeat(${numCols}, 1fr)` }}>
+                      <div className="text-[9px] text-slate-500 flex items-center pr-2">{year}</div>
+                      {navHeatmap.columns.map(col => {
+                        const cell = navHeatmap.cells.find(c => c.year === year && c.col === col);
+                        const ret = cell?.ret ?? 0;
+                        const intensity = Math.min(Math.abs(ret) / absMax, 1);
+                        return (
+                          <div key={col}
+                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%` : `${year}-${col}: no data`}
+                            className="h-10 rounded cursor-default flex items-center justify-center text-[9px] font-bold"
+                            style={{ backgroundColor: cellBg(ret, !!cell), color: intensity > 0.5 ? 'white' : '#374151' }}>
+                            {cell ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : ''}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Heatmap Lightbox */}
+      {heatmapEnlarged && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setHeatmapEnlarged(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[90vw] max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-800">Return Heatmap (NAV) — {navHeatFreq}</h3>
+              <button onClick={() => setHeatmapEnlarged(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><X size={18} /></button>
+            </div>
+            {(() => {
+              const absMax = Math.max(...navHeatmap.cells.map(c => Math.abs(c.ret)), 1);
+              const colLabels = navHeatFreq === 'monthly' ? MONTH_LABELS : navHeatmap.columns;
+              const numCols = navHeatmap.columns.length;
+              return (
+                <div>
+                  <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: `70px repeat(${numCols}, 1fr)` }}>
+                    <div />
+                    {colLabels.map(l => <div key={l} className="text-[10px] text-slate-400 text-center">{l}</div>)}
+                  </div>
+                  {navHeatmap.years.map(year => (
+                    <div key={year} className="grid gap-1 mb-1" style={{ gridTemplateColumns: `70px repeat(${numCols}, 1fr)` }}>
+                      <div className="text-[10px] text-slate-500 flex items-center pr-2">{year}</div>
+                      {navHeatmap.columns.map(col => {
+                        const cell = navHeatmap.cells.find(c => c.year === year && c.col === col);
+                        const ret = cell?.ret ?? 0;
+                        const intensity = Math.min(Math.abs(ret) / absMax, 1);
+                        const bg = !cell ? '#f1f5f9' : ret >= 0
+                          ? `rgba(239,68,68,${0.15 + intensity * 0.65})`
+                          : `rgba(16,185,129,${0.15 + intensity * 0.65})`;
+                        return (
+                          <div key={col}
+                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%` : `${year}-${col}: no data`}
+                            className="h-12 rounded cursor-default flex items-center justify-center text-[10px] font-bold"
+                            style={{ backgroundColor: bg, color: intensity > 0.5 ? 'white' : '#374151' }}>
+                            {cell ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : ''}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Data Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">

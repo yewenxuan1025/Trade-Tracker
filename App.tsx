@@ -12,7 +12,7 @@ import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, generateId, calculatePortfolioAnalysis } from './services/excelService';
-import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from './types';
+import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
 const STORAGE_KEY = 'trade_tracker_market_constants';
 const LOOKUP_DATA_KEY = 'trade_tracker_lookup_data';
@@ -30,7 +30,7 @@ const App: React.FC = () => {
   const { showToast } = useToast();
   const [lookupData, setLookupData] = useState<LookupSheetData | null>(() => {
     const saved = localStorage.getItem(LOOKUP_DATA_KEY);
-    if (saved) { try { const p = JSON.parse(saved); return { ...p, lastUpdated: new Date(p.lastUpdated) }; } catch(e){} }
+    if (saved) { try { const p = JSON.parse(saved); const result = { ...p, lastUpdated: new Date(p.lastUpdated) }; result.stocks = (result.stocks || []).map((s: StockData) => ({ ...s, ticker: padHkTicker(s.ticker, s.market) })); return result; } catch(e){} }
     return null;
   });
 
@@ -39,7 +39,7 @@ const App: React.FC = () => {
     if (!saved) return [];
     try {
         const parsed = JSON.parse(saved);
-        return parsed.map((t: any) => ({ ...t, id: t.id || generateId() }));
+        return parsed.map((t: any) => ({ ...t, id: t.id || generateId(), stock: padHkTicker(t.stock, t.market) }));
     } catch (e) { return []; }
   });
 
@@ -48,13 +48,13 @@ const App: React.FC = () => {
     if (!saved) return [];
     try {
         const parsed = JSON.parse(saved);
-        return parsed.map((t: any) => ({ ...t, id: t.id || generateId() }));
+        return parsed.map((t: any) => ({ ...t, id: t.id || generateId(), stock: padHkTicker(t.stock, t.market) }));
     } catch (e) { return []; }
   });
 
   const [pnlData, setPnlData] = useState<PnLData[]>(() => {
     const saved = localStorage.getItem(PNL_DATA_KEY);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? (JSON.parse(saved) as PnLData[]).map(p => ({ ...p, stock: padHkTicker(p.stock, p.market) })) : [];
   });
 
   const [navData, setNavData] = useState<NavData[]>(() => {
@@ -128,11 +128,40 @@ const App: React.FC = () => {
     });
   }, []);
 
+  // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
   // Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
   useEffect(() => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
   }, [lookupData, enrichTransactions]);
+
+  // #5: Auto-recalculate cash position whenever relevant data changes
+  useEffect(() => {
+    if (!cashLedger.length && !pnlData.length && !transactions.length && !optionTransactions.length) return;
+    const mc = marketConstants;
+    const toUsdByCurrency = (amount: number, currency: string) => {
+      const c = (currency || 'USD').toUpperCase();
+      if (c === 'HKD') return amount / mc.exg_rate;
+      if (c === 'AUD') return amount / mc.aud_exg;
+      if (c === 'SGD') return amount / mc.sg_exg;
+      return amount;
+    };
+    const toUsdByMarket = (amount: number, market: string) => {
+      const m = (market || '').toUpperCase().trim();
+      if (m === 'HK') return amount / mc.exg_rate;
+      if (m === 'AUS') return amount / mc.aud_exg;
+      if (m === 'SG') return amount / mc.sg_exg;
+      return amount;
+    };
+    const EXCLUDED = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
+    const netLedger = cashLedger.filter(e => !EXCLUDED.has((e.type || '').toLowerCase().replace(/[-\s]+/g, ''))).reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
+    const realizedPnl = pnlData.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || ''), 0);
+    const dividends = dividendData.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
+    const interest = interestData.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
+    const openStockCost = transactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+    const openOptionCost = optionTransactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+    setCashPosition(parseFloat((netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost).toFixed(2)));
+  }, [transactions, optionTransactions, pnlData, dividendData, interestData, cashLedger, marketConstants]);
 
   const handleFileProcess = async (file: File) => {
     setIsProcessing(true);
@@ -154,6 +183,11 @@ const App: React.FC = () => {
       setOptionTransactions(result.optionTransactions);
       setPnlData(result.pnl);
       setNavData(result.navData);
+      // Load benchmark if present in the uploaded file
+      if (result.benchmark && result.benchmark.length > 0) {
+        setBenchmarkData(result.benchmark);
+        showToast(`Loaded benchmark data: ${result.benchmark.length} days`, 'success');
+      }
       // Merge new income data (don't wipe existing)
       if (result.dividends.length > 0) setDividendData(result.dividends);
       if (result.interest.length > 0) setInterestData(result.interest);
@@ -275,9 +309,9 @@ const App: React.FC = () => {
           return { stocks: currentStocks, lastUpdated: new Date(), lookupDate: result.lookup?.lookupDate || prev?.lookupDate };
       });
 
-      // 2. Append Transactions (enrich)
+      // 2. Append Transactions (enrich with uploaded lookup first, fallback to current)
       setTransactions(prev => {
-          const enriched = enrichTransactions(result.transactions, lookupData);
+          const enriched = enrichTransactions(result.transactions, result.lookup || lookupData);
           return [...prev, ...enriched];
       });
 
@@ -459,7 +493,7 @@ const App: React.FC = () => {
       showToast("Stock P&L record created successfully!", 'success');
   }, [transactions, pnlData]);
 
-  const handleCreateOptionPnL = useCallback((ids: string[]) => {
+  const handleCreateOptionPnL = useCallback((ids: string[], optionAction?: string) => {
     if (ids.length !== 2) return;
     const t1 = optionTransactions.find(t => String(t.id) === String(ids[0]));
     const t2 = optionTransactions.find(t => String(t.id) === String(ids[1]));
@@ -483,8 +517,8 @@ const App: React.FC = () => {
     const returnPercent = openingCost !== 0 ? (realizedPnL / openingCost) * 100 : 0;
 
     const newPnl: PnLData = {
-        id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: buy.name, market: buy.market,
-        account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration,
+        id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: buy.name, market: buy.market || 'US',
+        account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration, optionAction,
         quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission, totalBuy: buy.total,
         sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission, totalSell: sell.total,
         realizedPnL, returnPercent,
@@ -584,7 +618,8 @@ const App: React.FC = () => {
         historyHk, historyNonHk,
         analysis.detailedHoldingsExport, analysis.weightedAvgs,
         navData, optionTransactions,
-        dividendData, interestData, cashLedger
+        dividendData, interestData, cashLedger,
+        benchmarkData
     );
   };
 
@@ -703,6 +738,7 @@ const App: React.FC = () => {
               <PnLTable
                 data={pnlData}
                 marketConstants={marketConstants}
+                lookupData={lookupData}
                 onExport={(filteredData) => exportPnLToExcel(filteredData, marketConstants)}
                 onUpload={(f) => handleSingleUpload('pnl', f)}
                 onEditRecord={handleEditPnL}

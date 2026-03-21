@@ -1,6 +1,6 @@
 
 import * as XLSX from 'xlsx';
-import { LookupSheetData, StockData, TransactionData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from '../types';
+import { LookupSheetData, StockData, TransactionData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from '../types';
 
 /**
  * Robust ID generator
@@ -119,7 +119,8 @@ const PNL_EXPORT_MAP: Record<string, string> = {
     year: 'Year',
     month: 'Month',
     expiration: 'Expiration',
-    strike: 'Strike'
+    strike: 'Strike',
+    optionAction: 'Action'
 };
 
 const NAV_EXPORT_MAP: Record<string, string> = {
@@ -152,6 +153,7 @@ export interface ParseResult {
   dividends: DividendData[];
   interest: InterestData[];
   cashLedger: CashLedgerEntry[];
+  benchmark: BenchmarkData;
   warnings: string[];
 }
 
@@ -426,7 +428,11 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                         else (txn as any)[key] = val !== undefined ? String(val) : '';
                     });
                     txn.id = generateId();
-                    if (txn.stock) transactions.push(txn as TransactionData);
+                    if (txn.stock) {
+                      // Normalise HK tickers to 4 digits
+                      txn.stock = padHkTicker(txn.stock, txn.market || '');
+                      transactions.push(txn as TransactionData);
+                    }
                 }
             }
             transactions.sort((a, b) => (a.stock || '').localeCompare(b.stock || '') || (a.date || '').localeCompare(b.date || ''));
@@ -669,7 +675,45 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
             }
         }
         
-        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, warnings });
+        // Normalise HK tickers to 4 digits across all parsed data
+        pnlData.forEach(p => { p.stock = padHkTicker(p.stock, p.market || ''); });
+        optionTransactions.forEach(t => { t.stock = padHkTicker(t.stock, t.market || ''); });
+        stocks.forEach(s => { s.ticker = padHkTicker(s.ticker, s.market || ''); });
+
+        // --- PARSE BENCHMARK INDICES SHEET (optional) ---
+        let benchmarkResult: BenchmarkData = [];
+        const benchmarkSheetName = workbook.SheetNames.find(n => {
+          const l = n.trim().toLowerCase();
+          return l === 'benchmark' || l === 'benchmark indices' || l === 'benchmark indicies' || l.startsWith('benchmark');
+        });
+        if (benchmarkSheetName) {
+          const bSheet = workbook.Sheets[benchmarkSheetName];
+          const bRaw = XLSX.utils.sheet_to_json(bSheet, { header: 1, raw: true }) as any[][];
+          let bHeaderIdx = -1;
+          for (let i = 0; i < Math.min(bRaw.length, 10); i++) {
+            if (String(bRaw[i][0] || '').trim().toLowerCase() === 'date') { bHeaderIdx = i; break; }
+          }
+          if (bHeaderIdx !== -1) {
+            const bHeaders = bRaw[bHeaderIdx].map((h: any) => String(h || '').trim());
+            const bIndexCols = bHeaders.slice(1).filter((h: string) => h);
+            for (let i = bHeaderIdx + 1; i < bRaw.length; i++) {
+              const row = bRaw[i];
+              if (!row || !row[0]) continue;
+              const dv = row[0];
+              let ds = '';
+              if (dv instanceof Date) ds = dv.toISOString().split('T')[0];
+              else if (typeof dv === 'number') { const d = new Date(Math.round((dv - 25569) * 86400 * 1000)); ds = d.toISOString().split('T')[0]; }
+              else ds = String(dv).trim();
+              if (!ds) continue;
+              const pt: any = { date: ds };
+              bIndexCols.forEach((col: string, ci: number) => { pt[col] = parseNumeric(row[ci + 1]); });
+              benchmarkResult.push(pt);
+            }
+            benchmarkResult.sort((a, b) => a.date.localeCompare(b.date));
+          }
+        }
+
+        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, benchmark: benchmarkResult, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);
@@ -840,7 +884,8 @@ export const calculatePortfolioAnalysis = (
 
     const g2Hk = g2Final.filter(d => d.Market === 'HK').map(({isCCS, Market, ...rest}) => rest);
     const g2Ccs = g2Final.filter(d => d.isCCS && d.Market !== 'HK').map(({isCCS, Market, ...rest}) => rest);
-    const g2Us = g2Final.filter(d => !d.isCCS && d.Market !== 'HK').map(({isCCS, Market, ...rest}) => rest);
+    // Keep Market field in g2Us so export can split by US vs AUS
+    const g2Us = g2Final.filter(d => !d.isCCS && d.Market !== 'HK').map(({isCCS, ...rest}) => rest);
     
     // Detailed Holdings (Fundamental)
     const detailedHoldings = g2Final.map(h => {
@@ -1001,7 +1046,8 @@ export const exportGlobalData = (
     dividends: DividendData[] = [],
     interest: InterestData[] = [],
     cashLedger: CashLedgerEntry[] = [],
-    fileName: string = 'TradeTracker_Pro_Export.xlsx'
+    fileName: string = 'TradeTracker_Pro_Export.xlsx',
+    benchmarkData: BenchmarkData = []
 ) => {
     const workbook = XLSX.utils.book_new();
 
@@ -1148,9 +1194,18 @@ export const exportGlobalData = (
     }
 
     if (holdingsUs.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(holdingsUs);
-        formatWorksheet(ws, holdingsUs);
-        XLSX.utils.book_append_sheet(workbook, ws, "Holdings Global (USD)");
+        const holdingsUsOnly = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS').map(({Market, ...rest}: any) => rest);
+        const holdingsAus = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() === 'AUS').map(({Market, ...rest}: any) => rest);
+        if (holdingsUsOnly.length > 0) {
+            const ws = XLSX.utils.json_to_sheet(holdingsUsOnly);
+            formatWorksheet(ws, holdingsUsOnly);
+            XLSX.utils.book_append_sheet(workbook, ws, "Holdings US (USD)");
+        }
+        if (holdingsAus.length > 0) {
+            const ws = XLSX.utils.json_to_sheet(holdingsAus);
+            formatWorksheet(ws, holdingsAus);
+            XLSX.utils.book_append_sheet(workbook, ws, "Holdings AUS (USD)");
+        }
     }
 
     // 2.5 FUNDAMENTAL ANALYSIS
@@ -1286,6 +1341,13 @@ export const exportGlobalData = (
         const ws = XLSX.utils.json_to_sheet(clRows);
         formatWorksheet(ws, clRows);
         XLSX.utils.book_append_sheet(workbook, ws, "Cash Ledger");
+    }
+
+    // 12. BENCHMARK INDICES
+    if (benchmarkData.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(benchmarkData);
+        formatWorksheet(ws, benchmarkData);
+        XLSX.utils.book_append_sheet(workbook, ws, "Benchmark Indices");
     }
 
     XLSX.writeFile(workbook, fileName);

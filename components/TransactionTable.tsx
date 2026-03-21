@@ -16,7 +16,7 @@ interface TransactionTableProps {
   onAppend?: (file: File) => void;
   onSplitTransaction: (originalId: string, split1: { shares: number; commission: number; total: number; lastMv: number }, split2: { shares: number; commission: number; total: number; lastMv: number }) => void;
   onCreatePnL: (ids: string[]) => void;
-  onCreateOptionPnL?: (ids: string[]) => void;
+  onCreateOptionPnL?: (ids: string[], optionAction?: string) => void;
   onAddTransaction: (txn: Partial<TransactionData>) => void;
   onEditTransaction: (id: string, txn: Partial<TransactionData>) => void;
   onDeleteTransaction: (id: string | string[]) => void;
@@ -64,6 +64,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   });
 
   // State for Option Table
+  const [optionPairAction, setOptionPairAction] = useState('');
   const [optionSearchTerm, setOptionSearchTerm] = useState('');
   const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof TransactionData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<Set<string>>(new Set());
@@ -422,7 +423,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                      <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
                   )}
                   {selectedOptionIds.size === 2 && onCreateOptionPnL && (
-                    <button onClick={() => onCreateOptionPnL(Array.from(selectedOptionIds))} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium shadow-sm hover:bg-indigo-700 transition-colors uppercase tracking-wider">Pair & P&L</button>
+                    <div className="flex items-center gap-1.5">
+                      <select value={optionPairAction} onChange={e => setOptionPairAction(e.target.value)} className="px-2 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-700">
+                        <option value="">-- Action --</option>
+                        {['Buy to Cover','Close Position','Assignment','Expire'].map(a => <option key={a} value={a}>{a}</option>)}
+                      </select>
+                      <button onClick={() => { onCreateOptionPnL(Array.from(selectedOptionIds), optionPairAction || undefined); setSelectedOptionIds(new Set()); setOptionPairAction(''); }} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium shadow-sm hover:bg-indigo-700 transition-colors uppercase tracking-wider">Pair & P&L</button>
+                    </div>
                   )}
                 </div>
               </div>
