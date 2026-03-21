@@ -112,6 +112,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   onIncomeUpload,
 }) => {
   const [activeTab, setActiveTab] = useState<'pnl' | 'trades' | 'stocks' | 'portfolio' | 'benchmark' | 'income'>('pnl');
+  const [enlargedChart, setEnlargedChart] = useState<string | null>(null);
   const [concentrationThreshold, setConcentrationThreshold] = useState(10);
   const [isWinnersExpanded, setIsWinnersExpanded] = useState(false);
   const [isLosersExpanded, setIsLosersExpanded] = useState(false);
@@ -437,21 +438,19 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return all;
   }, [portfolioAnalysis]);
 
-  // ── scatter data for cost vs price ────────────────────────────────────────────
-  const scatterData = useMemo(() => {
-    return group2Data
-      .filter((h: any) => (h.LastMV || 0) > 0)
-      .map((h: any) => ({
-        name: h.Stock,
-        cost: h.AvgCost,
-        price: h.LastPrice,
-        mv: h.LastMV,
-        pnlPct: (h.PnLPct || 0) * 100,
-      }));
-  }, [group2Data]);
-
-  const scatterMin = scatterData.length ? Math.min(...scatterData.map((d: any) => Math.min(d.cost, d.price))) * 0.9 : 0;
-  const scatterMax = scatterData.length ? Math.max(...scatterData.map((d: any) => Math.max(d.cost, d.price))) * 1.1 : 100;
+  // ── price ratio charts (Last Price / Avg Cost per market) ─────────────────────
+  const priceRatioCharts = useMemo(() => {
+    const toBar = (arr: any[]) =>
+      arr.filter((h: any) => (h.AvgCost || 0) > 0 && (h.LastPrice || 0) > 0)
+        .map((h: any) => ({ ticker: h.Stock, name: h.Name || h.Stock, ratio: h.LastPrice / h.AvgCost }))
+        .sort((a: any, b: any) => b.ratio - a.ratio);
+    return {
+      hk: toBar(portfolioAnalysis.g2Hk || []),
+      ccs: toBar(portfolioAnalysis.g2Ccs || []),
+      us: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS')),
+      aus: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() === 'AUS')),
+    };
+  }, [portfolioAnalysis]);
 
   // ── normalizedNav (multi-index + blend) ───────────────────────────────────
   const normalizedNav = useMemo(() => {
@@ -842,138 +841,6 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </Card>
             </div>
 
-            {/* A1: Cumulative P&L + Drawdown */}
-            <Card>
-              <SectionHeader
-                title="Cumulative P&L & Drawdown"
-                info="Cumulative realized P&L in USD over time. The red area shows the drawdown from peak."
-                icon={<TrendingUp size={16} />}
-              />
-              <ResponsiveContainer width="100%" height={280}>
-                <ComposedChart data={cumulativeData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                  <YAxis
-                    yAxisId="left"
-                    tickFormatter={v => `$${v >= 1000 ? Math.round(v / 1000) + 'k' : v}`}
-                    tick={{ fontSize: 10 }}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tickFormatter={v => `${v}%`}
-                    tick={{ fontSize: 10 }}
-                  />
-                  <Tooltip
-                    content={({ payload, label }: any) => (
-                      <div className="bg-white border border-slate-200 p-2 rounded shadow text-xs">
-                        <p className="font-bold text-slate-700">{label}</p>
-                        {payload?.map((e: any) => (
-                          <p key={e.dataKey} style={{ color: e.color }}>
-                            {e.name}: {e.dataKey === 'drawdown' ? `${e.value}%` : `$${e.value?.toLocaleString()}`}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '11px' }} />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="pnl"
-                    name="Cumulative P&L"
-                    stroke="#2563eb"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  <Area
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="drawdown"
-                    name="Drawdown %"
-                    stroke="#ef4444"
-                    fill="#fecaca"
-                    fillOpacity={0.6}
-                    dot={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </Card>
-
-            {/* A2: P&L Heatmap with frequency selector */}
-            <Card>
-              <div className="flex items-center justify-between mb-3">
-                <SectionHeader
-                  title="P&L Heatmap"
-                  info="P&L grouped by the selected frequency. Green = profit, Red = loss. Darker = larger magnitude. Second line = % of annual total."
-                  icon={<BarChart3 size={16} />}
-                />
-                {/* Frequency selector */}
-                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-                  {(['weekly', 'monthly', 'quarterly', 'annual'] as HeatFreq[]).map(f => (
-                    <button
-                      key={f}
-                      onClick={() => setHeatFreq(f)}
-                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-colors capitalize ${
-                        heatFreq === f ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {heatmapYears.length === 0 ? (
-                <p className="text-slate-400 text-sm text-center py-8">No data available</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <div className={heatFreq === 'weekly' ? 'min-w-[900px]' : 'min-w-[400px]'}>
-                    {/* Column headers */}
-                    <div
-                      className="grid gap-1 mb-1"
-                      style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
-                    >
-                      <div />
-                      {heatmapColumns.map(col => (
-                        <div key={col} className="text-[9px] text-slate-400 text-center truncate">{col}</div>
-                      ))}
-                    </div>
-                    {heatmapYears.map(year => (
-                      <div
-                        key={year}
-                        className="grid gap-1 mb-1"
-                        style={{ gridTemplateColumns: `auto repeat(${heatmapColumns.length}, 1fr)` }}
-                      >
-                        <div className="text-[9px] text-slate-500 flex items-center pr-2">{year}</div>
-                        {heatmapColumns.map((col, idx) => {
-                          const key = getHeatKey(year, col, idx);
-                          const data = heatmapData.get(key);
-                          const val = data?.total || 0;
-                          return (
-                            <div
-                              key={col}
-                              title={data ? `${key}: $${Math.round(val).toLocaleString()} (${data.count} trades)` : key}
-                              className="h-10 rounded cursor-default flex flex-col items-center justify-center text-[9px] font-bold leading-tight"
-                              style={{
-                                backgroundColor: heatColor(val),
-                                color: Math.abs(val) / maxAbsHeat > 0.5 ? 'white' : '#374151',
-                              }}
-                            >
-                              {data ? (
-                                <>
-                                  <span>{val > 0 ? '+' : ''}{Math.round(val / 1000)}k</span>
-                                  <span className="text-[7px] opacity-80">{data.pct > 0 ? '+' : ''}{data.pct.toFixed(0)}%</span>
-                                </>
-                              ) : ''}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Card>
           </>
         )}
 
@@ -1348,66 +1215,43 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </Card>
             </div>
 
-            {/* D4: Cost vs Price Scatter */}
-            {scatterData.length > 0 && (
-              <Card>
-                <SectionHeader
-                  title="Cost vs Last Price"
-                  info="Each dot is a current holding. X=avg cost, Y=last price, size=market value. Above diagonal = profit."
-                  icon={<Target size={16} />}
-                />
-                <ResponsiveContainer width="100%" height={320}>
-                  <ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="cost"
-                      name="Avg Cost"
-                      type="number"
-                      domain={['auto', 'auto']}
-                      tickFormatter={v => `$${v}`}
-                      tick={{ fontSize: 10 }}
-                      label={{ value: 'Avg Cost', position: 'bottom', fontSize: 10 }}
-                    />
-                    <YAxis
-                      dataKey="price"
-                      name="Last Price"
-                      type="number"
-                      domain={['auto', 'auto']}
-                      tickFormatter={v => `$${v}`}
-                      tick={{ fontSize: 10 }}
-                      label={{ value: 'Last Price', angle: -90, position: 'insideLeft', fontSize: 10 }}
-                    />
-                    <ZAxis dataKey="mv" range={[40, 800]} name="Market Value" />
-                    <Tooltip
-                      cursor={{ strokeDasharray: '3 3' }}
-                      content={({ payload }: any) => {
-                        if (!payload?.length) return null;
-                        const d = payload[0].payload;
-                        return (
-                          <div className="bg-white border border-slate-200 p-2 rounded shadow text-xs">
-                            <p className="font-bold">{d.name}</p>
-                            <p>Avg Cost: ${d.cost?.toFixed(2)}</p>
-                            <p>Last Price: ${d.price?.toFixed(2)}</p>
-                            <p>MV: ${Math.round(d.mv).toLocaleString()}</p>
-                            <p style={{ color: d.pnlPct >= 0 ? '#ef4444' : '#10b981' }}>P&L: {d.pnlPct?.toFixed(1)}%</p>
-                          </div>
-                        );
-                      }}
-                    />
-                    <Scatter data={scatterData} fill="#6366f1">
-                      {scatterData.map((d: any, i: number) => (
-                        <Cell key={i} fill={d.pnlPct >= 0 ? '#ef4444' : '#10b981'} fillOpacity={0.7} />
-                      ))}
-                    </Scatter>
-                    <ReferenceLine
-                      stroke="#94a3b8"
-                      strokeDasharray="5 5"
-                      segment={[{ x: scatterMin, y: scatterMin }, { x: scatterMax, y: scatterMax }]}
-                    />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </Card>
-            )}
+            {/* D4: Last Price / Avg Cost Ratio Charts */}
+            {(() => {
+              const PriceRatioChart = ({ data, label, chartId }: { data: any[], label: string, chartId: string }) => {
+                if (!data.length) return null;
+                const h = Math.max(200, data.length * 28 + 60);
+                return (
+                  <Card>
+                    <div className="flex items-center justify-between mb-3">
+                      <SectionHeader title={`Last / Cost — ${label}`} info="Ratio > 1 = profit (green), < 1 = loss (red). Sorted largest to smallest." icon={<Target size={16} />} />
+                      <button onClick={() => setEnlargedChart(chartId)} className="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors" title="Enlarge">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                      </button>
+                    </div>
+                    <ResponsiveContainer width="100%" height={h}>
+                      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 40 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                        <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={v => v.toFixed(1)} domain={[0, 'auto']} />
+                        <YAxis type="category" dataKey="ticker" tick={{ fontSize: 10 }} width={55} />
+                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }} />
+                        <ReferenceLine x={1} stroke="#94a3b8" strokeDasharray="4 4" />
+                        <Bar dataKey="ratio" radius={[0, 3, 3, 0]}>
+                          {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#10b981' : '#ef4444'} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Card>
+                );
+              };
+              return (
+                <>
+                  <PriceRatioChart data={priceRatioCharts.hk} label="HK" chartId="ratio-hk" />
+                  <PriceRatioChart data={priceRatioCharts.ccs} label="CCS" chartId="ratio-ccs" />
+                  <PriceRatioChart data={priceRatioCharts.us} label="US" chartId="ratio-us" />
+                  <PriceRatioChart data={priceRatioCharts.aus} label="AUS" chartId="ratio-aus" />
+                </>
+              );
+            })()}
 
             {/* D5: Expectancy & Kelly */}
             <Card>
@@ -1797,6 +1641,40 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           );
         })()}
       </div>
+
+      {/* Chart Lightbox */}
+      {enlargedChart && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6" onClick={() => setEnlargedChart(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[85vw] max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-800 text-sm">
+                {enlargedChart === 'ratio-hk' ? 'Last / Cost — HK' : enlargedChart === 'ratio-ccs' ? 'Last / Cost — CCS' : enlargedChart === 'ratio-us' ? 'Last / Cost — US' : enlargedChart === 'ratio-aus' ? 'Last / Cost — AUS' : enlargedChart}
+              </h3>
+              <button onClick={() => setEnlargedChart(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"><X size={18} /></button>
+            </div>
+            {(() => {
+              const chartDataMap: Record<string, any[]> = { 'ratio-hk': priceRatioCharts.hk, 'ratio-ccs': priceRatioCharts.ccs, 'ratio-us': priceRatioCharts.us, 'ratio-aus': priceRatioCharts.aus };
+              const data = chartDataMap[enlargedChart] || [];
+              if (!data.length) return <p className="text-slate-400 text-sm text-center py-8">No data</p>;
+              const h = Math.max(300, data.length * 30 + 80);
+              return (
+                <ResponsiveContainer width="100%" height={h}>
+                  <BarChart data={data} layout="vertical" margin={{ top: 0, right: 60, bottom: 0, left: 60 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => v.toFixed(1)} domain={[0, 'auto']} />
+                    <YAxis type="category" dataKey="ticker" tick={{ fontSize: 11 }} width={65} />
+                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
+                    <ReferenceLine x={1} stroke="#94a3b8" strokeDasharray="4 4" />
+                    <Bar dataKey="ratio" radius={[0, 4, 4, 0]}>
+                      {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#10b981' : '#ef4444'} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

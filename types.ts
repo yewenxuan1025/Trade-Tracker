@@ -76,6 +76,7 @@ export interface PnLData {
   // Option specific fields
   expiration?: string;
   strike?: number;
+  optionAction?: string; // 'Buy to Cover' | 'Close Position' | 'Assignment' | 'Expire'
 
   // Target Metrics (Calculated)
   tgtProfitCost?: number;

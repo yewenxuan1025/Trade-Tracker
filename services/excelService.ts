@@ -119,7 +119,8 @@ const PNL_EXPORT_MAP: Record<string, string> = {
     year: 'Year',
     month: 'Month',
     expiration: 'Expiration',
-    strike: 'Strike'
+    strike: 'Strike',
+    optionAction: 'Action'
 };
 
 const NAV_EXPORT_MAP: Record<string, string> = {
@@ -840,7 +841,8 @@ export const calculatePortfolioAnalysis = (
 
     const g2Hk = g2Final.filter(d => d.Market === 'HK').map(({isCCS, Market, ...rest}) => rest);
     const g2Ccs = g2Final.filter(d => d.isCCS && d.Market !== 'HK').map(({isCCS, Market, ...rest}) => rest);
-    const g2Us = g2Final.filter(d => !d.isCCS && d.Market !== 'HK').map(({isCCS, Market, ...rest}) => rest);
+    // Keep Market field in g2Us so export can split by US vs AUS
+    const g2Us = g2Final.filter(d => !d.isCCS && d.Market !== 'HK').map(({isCCS, ...rest}) => rest);
     
     // Detailed Holdings (Fundamental)
     const detailedHoldings = g2Final.map(h => {
@@ -1148,9 +1150,18 @@ export const exportGlobalData = (
     }
 
     if (holdingsUs.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(holdingsUs);
-        formatWorksheet(ws, holdingsUs);
-        XLSX.utils.book_append_sheet(workbook, ws, "Holdings Global (USD)");
+        const holdingsUsOnly = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS').map(({Market, ...rest}: any) => rest);
+        const holdingsAus = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() === 'AUS').map(({Market, ...rest}: any) => rest);
+        if (holdingsUsOnly.length > 0) {
+            const ws = XLSX.utils.json_to_sheet(holdingsUsOnly);
+            formatWorksheet(ws, holdingsUsOnly);
+            XLSX.utils.book_append_sheet(workbook, ws, "Holdings US (USD)");
+        }
+        if (holdingsAus.length > 0) {
+            const ws = XLSX.utils.json_to_sheet(holdingsAus);
+            formatWorksheet(ws, holdingsAus);
+            XLSX.utils.book_append_sheet(workbook, ws, "Holdings AUS (USD)");
+        }
     }
 
     // 2.5 FUNDAMENTAL ANALYSIS

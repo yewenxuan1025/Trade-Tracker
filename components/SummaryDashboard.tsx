@@ -20,6 +20,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
 
   // Cash deposit/withdrawal modal state
   const [showCashModal, setShowCashModal] = useState(false);
+  const [showReviewTable, setShowReviewTable] = useState(false);
   const [cashForm, setCashForm] = useState({ type: 'Deposit', amount: '', date: new Date().toISOString().split('T')[0], currency: 'USD', source: '', description: '' });
 
   const handleCashSubmit = () => {
@@ -372,11 +373,9 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                 </div>
                 <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Portfolio Overview</h2>
               </div>
-              {lookupData?.lookupDate && (
-                <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
-                  Data Current: {lookupData.lookupDate}
-                </span>
-              )}
+              <button onClick={() => setShowReviewTable(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${showReviewTable ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                <TableIcon size={14} />Review
+              </button>
            </div>
 
            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden max-w-2xl">
@@ -747,6 +746,37 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
             </div>
           ))}
       </section>
+
+      {/* Review Table */}
+      {showReviewTable && (
+        <section className="mt-8">
+          <h3 className="text-lg font-black text-slate-800 mb-4 uppercase tracking-tight">Holdings Review</h3>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Ticker</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Name</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Last Price</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Shares</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {[...group2.hk, ...group2.ccs, ...group2.us, ...group2.aus]
+                  .sort((a, b) => a.stock.localeCompare(b.stock))
+                  .map(h => (
+                  <tr key={h.stock} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-4 py-2 font-bold text-blue-600">{h.stock}</td>
+                    <td className="px-4 py-2 text-slate-600">{h.name}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.lastPrice || 0).toFixed(4)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.shares || 0).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Cash Deposit / Withdrawal Modal */}
       {showCashModal && (
