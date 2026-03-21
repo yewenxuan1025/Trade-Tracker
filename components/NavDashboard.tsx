@@ -3,7 +3,7 @@ import { Plus, Edit2, Save, X, Trash2, TrendingUp, DollarSign, Percent, Upload, 
 import ConfirmDialog from './ConfirmDialog';
 import { NavData } from '../types';
 import { generateId } from '../services/excelService';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
 
 interface NavDashboardProps {
   data: NavData[];
@@ -113,6 +113,43 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
     cumulativeReturn: item.cumulativeReturn * 100 // Convert to %
   }));
 
+  // NAV-based Cumulative Return & Drawdown (simple return from base NAV)
+  const navReturnData = useMemo(() => {
+    if (sortedData.length === 0) return [];
+    const base = sortedData[0].nav1 || sortedData[0].nav2 || 1;
+    let peakNav = base;
+    return sortedData.map(n => {
+      const nav = n.nav1 || n.nav2 || base;
+      peakNav = Math.max(peakNav, nav);
+      return {
+        date: n.date,
+        cumReturn: parseFloat(((nav - base) / base * 100).toFixed(2)),
+        drawdown: parseFloat(((nav - peakNav) / peakNav * 100).toFixed(2)),
+      };
+    });
+  }, [sortedData]);
+
+  // NAV-based Monthly Heatmap
+  const navMonthlyHeatmap = useMemo(() => {
+    if (sortedData.length === 0) return { cells: [], years: [], months: [] };
+    const monthlyMap = new Map<string, { first: number; last: number }>();
+    sortedData.forEach(n => {
+      const ym = n.date.substring(0, 7);
+      const nav = n.nav1 || n.nav2 || 1;
+      if (!monthlyMap.has(ym)) monthlyMap.set(ym, { first: nav, last: nav });
+      else monthlyMap.get(ym)!.last = nav;
+    });
+    const cells: Array<{ year: string; month: string; ret: number }> = [];
+    monthlyMap.forEach(({ first, last }, ym) => {
+      const [year, month] = ym.split('-');
+      const ret = first !== 0 ? parseFloat(((last - first) / first * 100).toFixed(2)) : 0;
+      cells.push({ year, month, ret });
+    });
+    const years = [...new Set(cells.map(c => c.year))].sort();
+    const months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    return { cells, years, months };
+  }, [sortedData]);
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Charts Section */}
@@ -135,8 +172,8 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                 <Tooltip 
                     contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
                     formatter={(value: number, name: string) => [
-                        name === 'cumulativeReturn' ? `${value.toFixed(2)}%` : `$${value.toLocaleString()}`,
-                        name === 'cumulativeReturn' ? 'Cumulative Return' : 'AUM'
+                        name === 'Cumulative Return' ? `${value.toFixed(2)}%` : `$${value.toLocaleString()}`,
+                        name
                     ]}
                 />
                 <Legend />
@@ -189,6 +226,65 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
             </div>
         </div>
       </div>
+
+      {/* NAV Cumulative Return & Drawdown */}
+      {navReturnData.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-600" /> Cumulative Return & Drawdown (NAV)</h3>
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={navReturnData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: 11 }} formatter={(v: any, name: string) => [`${Number(v).toFixed(2)}%`, name]} />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Line yAxisId="left" type="monotone" dataKey="cumReturn" name="Cumulative Return" stroke="#2563eb" strokeWidth={2} dot={false} />
+                <Area yAxisId="right" type="monotone" dataKey="drawdown" name="Drawdown %" stroke="#ef4444" fill="#fecaca" fillOpacity={0.5} dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* NAV Monthly Return Heatmap */}
+      {navMonthlyHeatmap.years.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4">Monthly Return Heatmap (NAV)</h3>
+          <div className="overflow-x-auto">
+            <div className="min-w-[500px]">
+              <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: `auto repeat(12, 1fr)` }}>
+                <div />
+                {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map(m => (
+                  <div key={m} className="text-[9px] text-slate-400 text-center">{m}</div>
+                ))}
+              </div>
+              {navMonthlyHeatmap.years.map(year => (
+                <div key={year} className="grid gap-1 mb-1" style={{ gridTemplateColumns: `auto repeat(12, 1fr)` }}>
+                  <div className="text-[9px] text-slate-500 flex items-center pr-2">{year}</div>
+                  {navMonthlyHeatmap.months.map(month => {
+                    const cell = navMonthlyHeatmap.cells.find(c => c.year === year && c.month === month);
+                    const ret = cell?.ret || 0;
+                    const absMax = Math.max(...navMonthlyHeatmap.cells.map(c => Math.abs(c.ret)), 1);
+                    const intensity = Math.min(Math.abs(ret) / absMax, 1);
+                    const bg = !cell ? '#f1f5f9' : ret >= 0
+                      ? `rgba(16,185,129,${0.15 + intensity * 0.65})`
+                      : `rgba(239,68,68,${0.15 + intensity * 0.65})`;
+                    return (
+                      <div key={month} title={cell ? `${year}-${month}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%` : `${year}-${month}: no data`}
+                        className="h-10 rounded cursor-default flex items-center justify-center text-[9px] font-bold"
+                        style={{ backgroundColor: bg, color: intensity > 0.6 ? 'white' : '#374151' }}>
+                        {cell ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : ''}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Data Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
