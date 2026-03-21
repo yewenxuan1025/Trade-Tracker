@@ -364,6 +364,46 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
 
   return (
     <div className="flex flex-col h-full overflow-y-auto custom-scrollbar p-1 space-y-8 pb-20">
+      {/* Review Table — at the top when toggled */}
+      {showReviewTable && (
+        <section>
+          <h3 className="text-lg font-black text-slate-800 mb-3 uppercase tracking-tight">Holdings Review</h3>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <table className="w-full text-left text-xs border-collapse table-fixed">
+              <colgroup>
+                <col className="w-24" />
+                <col className="w-48" />
+                <col className="w-32" />
+                <col className="w-28" />
+              </colgroup>
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Ticker</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Name</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Last Price</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Shares</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {[
+                  // HK: sort numerically
+                  ...[...group2.hk].sort((a, b) => parseInt(a.stock || '0', 10) - parseInt(b.stock || '0', 10)),
+                  // Others: sort alphabetically
+                  ...[...group2.ccs, ...group2.us, ...group2.aus].sort((a, b) => a.stock.localeCompare(b.stock)),
+                ].map(h => (
+                  <tr key={h.stock} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-4 py-2 font-bold text-blue-600">{h.stock}</td>
+                    <td className="px-4 py-2 text-slate-600 truncate">{h.name}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.lastPrice || 0).toFixed(4)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.shares || 0).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       <section>
         <div className="flex flex-col gap-6 mb-8">
            <div className="flex items-center justify-between">
@@ -747,36 +787,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           ))}
       </section>
 
-      {/* Review Table */}
-      {showReviewTable && (
-        <section className="mt-8">
-          <h3 className="text-lg font-black text-slate-800 mb-4 uppercase tracking-tight">Holdings Review</h3>
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Ticker</th>
-                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider">Name</th>
-                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Last Price</th>
-                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-right">Shares</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {[...group2.hk, ...group2.ccs, ...group2.us, ...group2.aus]
-                  .sort((a, b) => a.stock.localeCompare(b.stock))
-                  .map(h => (
-                  <tr key={h.stock} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-4 py-2 font-bold text-blue-600">{h.stock}</td>
-                    <td className="px-4 py-2 text-slate-600">{h.name}</td>
-                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.lastPrice || 0).toFixed(4)}</td>
-                    <td className="px-4 py-2 text-right font-mono text-slate-700">{(h.shares || 0).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      {/* Review Table — moved to top, shown inline */}
 
       {/* Cash Deposit / Withdrawal Modal */}
       {showCashModal && (
