@@ -41,7 +41,7 @@ const parseExcelDate = (val: any): string => {
 const NUMERIC_KEYS: (keyof StockData)[] = ['marketCap', 'closePrice', 'peTTM', 'pb', 'dividendYield', 'roeTTM', 'psQuantile'];
 const TRANSACTION_NUMERIC_KEYS: (keyof TransactionData)[] = ['price', 'shares', 'commission', 'total', 'lastPrice', 'lastMv', 'strike'];
 const TWO_DECIMAL_KEYS: (keyof StockData)[] = ['dividendYield', 'roeTTM', 'psQuantile', 'pb', 'closePrice', 'peTTM'];
-const NAV_NUMERIC_KEYS: (keyof NavData)[] = ['aum', 'nav1', 'cumulativeReturn', 'shares', 'nav2'];
+const NAV_NUMERIC_KEYS: (keyof NavData)[] = ['aum', 'nav1', 'cumulativeReturn', 'shares', 'nav2', 'cashFlow'];
 
 const LOOKUP_EXPORT_MAP: Record<string, string> = {
     ticker: 'Ticker',
@@ -126,6 +126,7 @@ const PNL_EXPORT_MAP: Record<string, string> = {
 const NAV_EXPORT_MAP: Record<string, string> = {
     date: 'Date',
     aum: 'AUM',
+    cashFlow: 'Cash Flow',
     nav1: 'NAV1',
     cumulativeReturn: 'Cumulative Return',
     shares: 'Shares',
