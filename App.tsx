@@ -746,7 +746,7 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'nav' && (
-              <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} />
+              <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} cashLedger={cashLedger} marketConstants={marketConstants} />
             )}
             {activeTab === 'history' && (
               <HistoryDashboard

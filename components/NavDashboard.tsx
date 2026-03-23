@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Plus, Edit2, Save, X, Trash2, TrendingUp, Upload, Calendar, Expand } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
-import { NavData } from '../types';
+import { NavData, CashLedgerEntry, MarketConstants } from '../types';
 import { generateId } from '../services/excelService';
 import { Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area } from 'recharts';
 
@@ -26,9 +26,11 @@ interface NavDashboardProps {
   data: NavData[];
   onUpdate: (data: NavData[]) => void;
   onUpload: (file: File) => void;
+  cashLedger?: CashLedgerEntry[];
+  marketConstants?: MarketConstants;
 }
 
-const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload }) => {
+const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, cashLedger = [], marketConstants }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newRecord, setNewRecord] = useState<Partial<NavData>>({ date: new Date().toISOString().split('T')[0], aum: 0 });
@@ -42,6 +44,47 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
   const sortedData = useMemo(() => {
     return [...data].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [data]);
+
+  // Adjusted NAV/Shares/CumulativeReturn accounting for cash deposits & withdrawals
+  const adjData = useMemo(() => {
+    if (sortedData.length === 0) return new Map<string, { adjShares: number; adjNav: number; adjCumReturn: number }>();
+    const toUsd = (amount: number, currency: string) => {
+      const c = (currency || 'USD').toUpperCase();
+      if (!marketConstants) return amount;
+      if (c === 'HKD') return amount / marketConstants.exg_rate;
+      if (c === 'AUD') return amount / marketConstants.aud_exg;
+      if (c === 'SGD') return amount / marketConstants.sg_exg;
+      return amount;
+    };
+    const sortedCash = [...cashLedger]
+      .filter(c => c.type.toLowerCase() === 'deposit' || c.type.toLowerCase() === 'withdrawal')
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const result = new Map<string, { adjShares: number; adjNav: number; adjCumReturn: number }>();
+    let adjShares = 0;
+    let prevDate = '';
+    let prevNav = 1;
+    sortedData.forEach((record, idx) => {
+      if (idx === 0) {
+        adjShares = record.aum > 0 ? record.aum : 1; // initial NAV = 1
+        const adjNav = adjShares > 0 ? record.aum / adjShares : 1;
+        result.set(record.id, { adjShares, adjNav, adjCumReturn: adjNav - 1 });
+        prevDate = record.date;
+        prevNav = adjNav;
+        return;
+      }
+      // Cash flows between previous record date (exclusive) and this date (inclusive)
+      const flows = sortedCash.filter(c => c.date > prevDate && c.date <= record.date);
+      flows.forEach(c => {
+        adjShares += toUsd(c.amount, c.currency) / prevNav;
+      });
+      adjShares = Math.max(adjShares, 0);
+      const adjNav = adjShares > 0 ? record.aum / adjShares : 0;
+      result.set(record.id, { adjShares, adjNav, adjCumReturn: adjNav - 1 });
+      prevDate = record.date;
+      prevNav = adjNav > 0 ? adjNav : prevNav;
+    });
+    return result;
+  }, [sortedData, cashLedger, marketConstants]);
 
   // Set periodStart to earliest date when data loads
   useMemo(() => {
@@ -151,21 +194,21 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
   // NAV-based Heatmap (frequency-aware, date-format-safe)
   const navHeatmap = useMemo(() => {
     if (sortedData.length === 0) return { cells: [], years: [], columns: [] };
-    const periodMap = new Map<string, { first: number; last: number }>();
+    const periodMap = new Map<string, { first: number; last: number; firstAum: number; lastAum: number }>();
     sortedData.forEach(n => {
       const key = getNavFreqKey(n.date, navHeatFreq);
       if (!key) return;
       const nav = n.nav1 || n.nav2 || 1;
-      if (!periodMap.has(key)) periodMap.set(key, { first: nav, last: nav });
-      else periodMap.get(key)!.last = nav;
+      if (!periodMap.has(key)) periodMap.set(key, { first: nav, last: nav, firstAum: n.aum, lastAum: n.aum });
+      else { periodMap.get(key)!.last = nav; periodMap.get(key)!.lastAum = n.aum; }
     });
-    const cells: Array<{ year: string; col: string; ret: number }> = [];
-    periodMap.forEach(({ first, last }, key) => {
+    const cells: Array<{ year: string; col: string; ret: number; aumChange: number }> = [];
+    periodMap.forEach(({ first, last, firstAum, lastAum }, key) => {
       const ret = first !== 0 ? parseFloat(((last - first) / first * 100).toFixed(2)) : 0;
-      // Derive year: everything before first '-' after 4th char
+      const aumChange = parseFloat((lastAum - firstAum).toFixed(0));
       const year = key.substring(0, 4);
       const col = navHeatFreq === 'annual' ? 'Annual' : key.substring(5); // e.g. '10', 'Q3', 'W42'
-      cells.push({ year, col, ret });
+      cells.push({ year, col, ret, aumChange });
     });
     const years = [...new Set(cells.map(c => c.year))].filter(y => /^\d{4}$/.test(y)).sort();
     let columns: string[];
@@ -318,13 +361,22 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                       {navHeatmap.columns.map(col => {
                         const cell = navHeatmap.cells.find(c => c.year === year && c.col === col);
                         const ret = cell?.ret ?? 0;
+                        const aumChange = cell?.aumChange ?? 0;
                         const intensity = Math.min(Math.abs(ret) / absMax, 1);
+                        const fmtAum = (v: number) => {
+                          const abs = Math.abs(v);
+                          const sign = v >= 0 ? '+' : '-';
+                          if (abs >= 1_000_000) return `${sign}$${(abs/1_000_000).toFixed(1)}M`;
+                          if (abs >= 1_000) return `${sign}$${(abs/1_000).toFixed(0)}K`;
+                          return `${sign}$${abs.toFixed(0)}`;
+                        };
                         return (
                           <div key={col}
-                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%` : `${year}-${col}: no data`}
-                            className="h-10 rounded cursor-default flex items-center justify-center text-[9px] font-bold"
+                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%  AUM Δ ${fmtAum(aumChange)}` : `${year}-${col}: no data`}
+                            className="h-12 rounded cursor-default flex flex-col items-center justify-center gap-0"
                             style={{ backgroundColor: cellBg(ret, !!cell), color: intensity > 0.5 ? 'white' : '#374151' }}>
-                            {cell ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : ''}
+                            {cell ? <span className="text-[9px] font-bold leading-tight">{ret > 0 ? '+' : ''}{ret.toFixed(1)}%</span> : ''}
+                            {cell ? <span className="text-[8px] leading-tight opacity-80">{fmtAum(aumChange)}</span> : ''}
                           </div>
                         );
                       })}
@@ -361,16 +413,25 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                       {navHeatmap.columns.map(col => {
                         const cell = navHeatmap.cells.find(c => c.year === year && c.col === col);
                         const ret = cell?.ret ?? 0;
+                        const aumChange = cell?.aumChange ?? 0;
                         const intensity = Math.min(Math.abs(ret) / absMax, 1);
                         const bg = !cell ? '#f1f5f9' : ret >= 0
                           ? `rgba(239,68,68,${0.15 + intensity * 0.65})`
                           : `rgba(16,185,129,${0.15 + intensity * 0.65})`;
+                        const fmtAum = (v: number) => {
+                          const abs = Math.abs(v);
+                          const sign = v >= 0 ? '+' : '-';
+                          if (abs >= 1_000_000) return `${sign}$${(abs/1_000_000).toFixed(1)}M`;
+                          if (abs >= 1_000) return `${sign}$${(abs/1_000).toFixed(0)}K`;
+                          return `${sign}$${abs.toFixed(0)}`;
+                        };
                         return (
                           <div key={col}
-                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%` : `${year}-${col}: no data`}
-                            className="h-12 rounded cursor-default flex items-center justify-center text-[10px] font-bold"
+                            title={cell ? `${year}-${col}: ${ret > 0 ? '+' : ''}${ret.toFixed(2)}%  AUM Δ ${fmtAum(aumChange)}` : `${year}-${col}: no data`}
+                            className="h-14 rounded cursor-default flex flex-col items-center justify-center gap-0.5"
                             style={{ backgroundColor: bg, color: intensity > 0.5 ? 'white' : '#374151' }}>
-                            {cell ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : ''}
+                            {cell ? <span className="text-[10px] font-bold leading-tight">{ret > 0 ? '+' : ''}{ret.toFixed(1)}%</span> : ''}
+                            {cell ? <span className="text-[9px] leading-tight opacity-80">{fmtAum(aumChange)}</span> : ''}
                           </div>
                         );
                       })}
@@ -430,20 +491,25 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                 <th className="px-6 py-4">NAV</th>
                 <th className="px-6 py-4">Cumulative Return</th>
                 <th className="px-6 py-4">Shares</th>
+                <th className="px-6 py-4 bg-blue-50 text-blue-600" title="NAV adjusted for cash deposits/withdrawals">Adj. NAV</th>
+                <th className="px-6 py-4 bg-blue-50 text-blue-600" title="Cumulative return adjusted for cash deposits/withdrawals">Adj. Cum. Return</th>
+                <th className="px-6 py-4 bg-blue-50 text-blue-600" title="Shares adjusted for cash deposits/withdrawals">Adj. Shares</th>
                 <th className="px-6 py-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {sortedData.length === 0 ? (
-                <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400">No NAV records found. Upload a file or add a record.</td></tr>
+                <tr><td colSpan={9} className="px-6 py-8 text-center text-slate-400">No NAV records found. Upload a file or add a record.</td></tr>
               ) : (
-                [...sortedData].reverse().map((item) => (
+                [...sortedData].reverse().map((item) => {
+                  const adj = adjData.get(item.id);
+                  return (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
                     <td className="px-6 py-4 font-medium text-slate-900">
                         {editingId === item.id ? (
-                            <input 
-                                type="date" 
-                                value={editRecord.date} 
+                            <input
+                                type="date"
+                                value={editRecord.date}
                                 onChange={e => setEditRecord({...editRecord, date: e.target.value})}
                                 className="px-2 py-1 rounded border border-slate-300"
                             />
@@ -451,9 +517,9 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                     </td>
                     <td className="px-6 py-4 font-mono text-slate-600">
                         {editingId === item.id ? (
-                            <input 
-                                type="number" 
-                                value={editRecord.aum} 
+                            <input
+                                type="number"
+                                value={editRecord.aum}
                                 onChange={e => setEditRecord({...editRecord, aum: parseFloat(e.target.value)})}
                                 className="px-2 py-1 rounded border border-slate-300 w-32"
                             />
@@ -465,14 +531,19 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                     </td>
                     <td className="px-6 py-4 text-slate-500">
                         {editingId === item.id ? (
-                            <input 
-                                type="number" 
-                                value={editRecord.shares} 
+                            <input
+                                type="number"
+                                value={editRecord.shares}
                                 onChange={e => setEditRecord({...editRecord, shares: parseFloat(e.target.value)})}
                                 className="px-2 py-1 rounded border border-slate-300 w-32"
                             />
                         ) : item.shares.toLocaleString()}
                     </td>
+                    <td className="px-6 py-4 font-mono text-slate-600 bg-blue-50/50">{adj ? adj.adjNav.toFixed(4) : '—'}</td>
+                    <td className={`px-6 py-4 font-mono font-medium bg-blue-50/50 ${(adj?.adjCumReturn ?? 0) >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                        {adj ? `${(adj.adjCumReturn * 100).toFixed(2)}%` : '—'}
+                    </td>
+                    <td className="px-6 py-4 text-slate-500 bg-blue-50/50">{adj ? Math.round(adj.adjShares).toLocaleString() : '—'}</td>
                     <td className="px-6 py-4 text-right">
                         {editingId === item.id ? (
                             <div className="flex justify-end space-x-2">
@@ -487,7 +558,8 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload })
                         )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
