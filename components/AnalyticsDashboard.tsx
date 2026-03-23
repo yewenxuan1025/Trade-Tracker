@@ -1486,10 +1486,9 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           const withdrawals = filtCash.filter(c => c.type.toLowerCase() === 'withdrawal').reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
           const fees = filtCash.filter(c => c.type.toLowerCase() === 'fee').reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
           const netCash = filtCash.reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
-          // Running cash balance (all time)
-          const runningBalance = cashLedger
+          // Net cash flows for the filtered period
+          const runningBalance = filtCash
             .filter(c => ['deposit','withdrawal','fee'].includes(c.type.toLowerCase()))
-            .sort((a, b) => a.date.localeCompare(b.date))
             .reduce((s, c) => s + toUsd(c.amount, c.currency), 0);
 
           // Monthly dividend aggregation
