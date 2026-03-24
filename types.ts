@@ -251,6 +251,7 @@ export interface NavData {
   cumulativeReturn: number;
   shares: number;
   nav2: number;
+  cashFlow?: number;
 }
 
 export const NAV_HEADER_MAP: Record<string, keyof NavData> = {
@@ -259,7 +260,10 @@ export const NAV_HEADER_MAP: Record<string, keyof NavData> = {
   'NAV1': 'nav1',
   'Cumulative Return': 'cumulativeReturn',
   'Shares': 'shares',
-  'NAV2': 'nav2'
+  'NAV2': 'nav2',
+  'Cash Flow': 'cashFlow',
+  'Cash Movement': 'cashFlow',
+  'Deposit/Withdrawal': 'cashFlow',
 };
 
 // HK ticker normalisation: pad numeric tickers to 4 digits (e.g. "297" → "0297")
