@@ -1271,7 +1271,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                               contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }}
                             />
                             <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 9, fill: '#94a3b8' }} />
-                            <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 4, 4]} baseValue={1}>
+                            <Bar dataKey="ratio" barSize={barW} baseValue={1}>
                               {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
                             </Bar>
                           </BarChart>
@@ -1752,7 +1752,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                         <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={['auto', 'auto']} />
                         <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
                         <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
-                        <Bar dataKey="ratio" barSize={barW} radius={[4, 4, 4, 4]} baseValue={1}>
+                        <Bar dataKey="ratio" barSize={barW} baseValue={1}>
                           {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
                         </Bar>
                       </BarChart>
