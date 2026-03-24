@@ -443,8 +443,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const priceRatioCharts = useMemo(() => {
     const toBar = (arr: any[]) =>
       arr.filter((h: any) => (h.AvgCost || 0) > 0 && (h.LastPrice || 0) > 0)
-        .map((h: any) => ({ ticker: h.Stock, name: h.Name || h.Stock, ratio: h.LastPrice / h.AvgCost }))
-        .sort((a: any, b: any) => b.ratio - a.ratio);
+        .map((h: any) => { const ratio = h.LastPrice / h.AvgCost; return { ticker: h.Stock, name: h.Name || h.Stock, ratio, dev: ratio - 1 }; })
+        .sort((a: any, b: any) => b.dev - a.dev);
     return {
       hk: toBar(portfolioAnalysis.g2Hk || []),
       ccs: toBar(portfolioAnalysis.g2Ccs || []),
@@ -1250,6 +1250,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 if (!data.length) return null;
                 const barW = Math.max(24, Math.min(60, 600 / data.length));
                 const chartW = Math.max(400, data.length * (barW + 8) + 80);
+                const devVals = data.map((d: any) => d.dev);
+                const minDev = Math.min(...devVals);
+                const maxDev = Math.max(...devVals);
+                const pad = Math.max(Math.abs(minDev), Math.abs(maxDev)) * 0.15;
+                const ratioDomain: [number, number] = [Math.min(minDev, -pad), Math.max(maxDev, pad)];
                 return (
                   <Card>
                     <div className="flex items-center justify-between mb-3">
@@ -1264,15 +1269,15 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                           <BarChart data={data} margin={{ top: 20, right: 16, bottom: 40, left: 40 }}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                             <XAxis dataKey="ticker" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" height={50} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={['auto', 'auto']} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `${(v + 1).toFixed(2)}×`} domain={ratioDomain} />
                             <Tooltip
-                              formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']}
+                              formatter={(v: any) => [`${(Number(v) + 1).toFixed(3)}×`, 'Ratio']}
                               labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }}
                               contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 11 }}
                             />
-                            <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 9, fill: '#94a3b8' }} />
-                            <Bar dataKey="ratio" barSize={barW} baseValue={1}>
-                              {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                            <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 9, fill: '#94a3b8' }} />
+                            <Bar dataKey="dev" barSize={barW}>
+                              {data.map((d: any, i: number) => <Cell key={i} fill={d.dev >= 0 ? '#ef4444' : '#10b981'} />)}
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>
@@ -1742,6 +1747,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               if (!data.length) return <p className="text-slate-400 text-sm text-center py-8">No data</p>;
               const barW = Math.max(20, Math.min(60, 900 / data.length));
               const chartW = Math.max(600, data.length * (barW + 8) + 100);
+              const eDevVals = data.map((d: any) => d.dev);
+              const eMinDev = Math.min(...eDevVals);
+              const eMaxDev = Math.max(...eDevVals);
+              const ePad = Math.max(Math.abs(eMinDev), Math.abs(eMaxDev)) * 0.15;
+              const eRatioDomain: [number, number] = [Math.min(eMinDev, -ePad), Math.max(eMaxDev, ePad)];
               return (
                 <div className="overflow-x-auto">
                   <div style={{ width: `${chartW}px`, height: '400px' }}>
@@ -1749,11 +1759,11 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       <BarChart data={data} margin={{ top: 20, right: 20, bottom: 50, left: 50 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                         <XAxis dataKey="ticker" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" height={55} />
-                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v.toFixed(1)}×`} domain={['auto', 'auto']} />
-                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
-                        <ReferenceLine y={1} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
-                        <Bar dataKey="ratio" barSize={barW} baseValue={1}>
-                          {data.map((d: any, i: number) => <Cell key={i} fill={d.ratio >= 1 ? '#ef4444' : '#10b981'} />)}
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${(v + 1).toFixed(2)}×`} domain={eRatioDomain} />
+                        <Tooltip formatter={(v: any) => [`${(Number(v) + 1).toFixed(3)}×`, 'Ratio']} labelFormatter={(l: any) => { const d = data.find((x: any) => x.ticker === l); return d ? `${l} — ${d.name}` : l; }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: 12 }} />
+                        <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1×', position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
+                        <Bar dataKey="dev" barSize={barW}>
+                          {data.map((d: any, i: number) => <Cell key={i} fill={d.dev >= 0 ? '#ef4444' : '#10b981'} />)}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
