@@ -33,16 +33,44 @@ interface NavDashboardProps {
 
 const INITIAL_SHARES = 600_000;
 
-/** Compute adjusted NAV fields from AUM + cashFlow without overwriting original file values.
- *  Formula:
+/** Build a date→USD cash-flow map from Cash Ledger Deposit/Withdrawal entries. */
+const buildLedgerFlowMap = (
+  cashLedger: CashLedgerEntry[],
+  mc?: MarketConstants
+): Map<string, number> => {
+  const map = new Map<string, number>();
+  cashLedger.forEach(entry => {
+    const type = (entry.type || '').toLowerCase();
+    if (type !== 'deposit' && type !== 'withdrawal') return;
+    // Convert to USD
+    let amtUsd = entry.amount;
+    if (mc) {
+      const c = (entry.currency || 'USD').toUpperCase();
+      if (c === 'HKD') amtUsd = amtUsd / mc.exg_rate;
+      else if (c === 'AUD') amtUsd = amtUsd / mc.aud_exg;
+      else if (c === 'SGD') amtUsd = amtUsd / mc.sg_exg;
+    }
+    const date = entry.date.replace(/\//g, '-');
+    map.set(date, (map.get(date) || 0) + amtUsd);
+  });
+  return map;
+};
+
+/** Compute adjusted NAV fields from AUM + effective cashFlow (manual + ledger).
+ *  Preserves original nav1, shares, cumulativeReturn from the uploaded file.
+ *  Formula (previous-NAV share issuance):
  *    Day 0  → adjShares = 600,000 ; adjNav = AUM / 600,000
- *    Day N (cashFlow = 0) → adjShares = prevAdjShares ; adjNav = AUM / adjShares
- *    Day N (cashFlow ≠ 0) → sharesIssued = cashFlow / prevAdjNav (previous day's NAV)
- *                            adjShares = prevAdjShares + sharesIssued
- *                            adjNav = AUM / adjShares
- *  Original nav1, shares, cumulativeReturn from the uploaded file are preserved.
+ *    Day N (effectiveCF = 0) → adjShares unchanged ; adjNav = AUM / adjShares
+ *    Day N (effectiveCF ≠ 0) → sharesIssued = effectiveCF / prevAdjNav
+ *                               adjShares = prevAdjShares + sharesIssued
+ *                               adjNav    = AUM / adjShares
  */
-const recomputeAll = (rawData: NavData[]): NavData[] => {
+const recomputeAll = (
+  rawData: NavData[],
+  cashLedger: CashLedgerEntry[] = [],
+  mc?: MarketConstants
+): NavData[] => {
+  const ledgerMap = buildLedgerFlowMap(cashLedger, mc);
   const sorted = [...rawData].sort((a, b) =>
     new Date(a.date.replace(/\//g, '-')).getTime() - new Date(b.date.replace(/\//g, '-')).getTime()
   );
@@ -50,16 +78,20 @@ const recomputeAll = (rawData: NavData[]): NavData[] => {
   let prevAdjNav = 1;
   let baseAdjNav = 1;
   return sorted.map((item, index) => {
-    const cashFlow = item.cashFlow || 0;
+    const normalizedDate = item.date.replace(/\//g, '-');
+    const manualCF = item.cashFlow || 0;
+    const ledgerCF = ledgerMap.get(normalizedDate) || 0;
+    const effectiveCF = manualCF + ledgerCF;
+
     let adjShares: number;
     let adjNav: number;
     if (index === 0) {
       adjShares = INITIAL_SHARES;
       adjNav = INITIAL_SHARES > 0 ? item.aum / INITIAL_SHARES : 1;
       baseAdjNav = adjNav;
-    } else if (cashFlow !== 0) {
+    } else if (effectiveCF !== 0) {
       // New shares issued at previous day's NAV
-      const sharesIssued = prevAdjNav > 0 ? cashFlow / prevAdjNav : 0;
+      const sharesIssued = prevAdjNav > 0 ? effectiveCF / prevAdjNav : 0;
       adjShares = prevAdjShares + sharesIssued;
       adjNav = adjShares > 0 ? item.aum / adjShares : 1;
     } else {
@@ -69,13 +101,11 @@ const recomputeAll = (rawData: NavData[]): NavData[] => {
     prevAdjShares = adjShares;
     prevAdjNav = adjNav;
     const adjCumulativeReturn = baseAdjNav !== 0 ? (adjNav - baseAdjNav) / baseAdjNav : 0;
-    // Keep original file values (nav1, shares, cumulativeReturn); add adj fields separately
     return { ...item, adjNav, adjShares, adjCumulativeReturn };
   });
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, onExport, cashLedger: _cashLedger, marketConstants: _marketConstants }) => {
+const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, onExport, cashLedger = [], marketConstants }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newRecord, setNewRecord] = useState<Partial<NavData>>({ date: new Date().toISOString().split('T')[0], aum: 0, cashFlow: 0 });
@@ -86,8 +116,11 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
   const [navHeatFreq, setNavHeatFreq] = useState<NavHeatFreq>('monthly');
   const [heatmapEnlarged, setHeatmapEnlarged] = useState(false);
 
-  // sortedData = raw data sorted + all derived fields recomputed
-  const sortedData = useMemo(() => recomputeAll(data), [data]);
+  // Ledger flow map — rebuilt whenever cashLedger or marketConstants change
+  const ledgerFlowMap = useMemo(() => buildLedgerFlowMap(cashLedger, marketConstants), [cashLedger, marketConstants]);
+
+  // sortedData = raw data sorted + all derived adj fields (uses manual cashFlow + ledger flows)
+  const sortedData = useMemo(() => recomputeAll(data, cashLedger, marketConstants), [data, cashLedger, marketConstants]);
 
   // Set periodStart to earliest date when data loads
   useMemo(() => {
@@ -111,9 +144,22 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
       date: newRecord.date,
       aum: newRecord.aum || 0,
       cashFlow: newRecord.cashFlow || 0,
-      shares: 0, nav1: 0, nav2: 0, cumulativeReturn: 0, // recomputed by recomputeAll via sortedData
+      shares: 0, nav1: 0, nav2: 0, cumulativeReturn: 0,
     };
-    onUpdate([...data, newItem]);
+    // Compute adj values for the new item in the context of existing data, then
+    // back-fill the original columns (nav1/nav2/shares/cumulativeReturn) so they
+    // are stored with meaningful values rather than zeros.
+    const newDataSet = [...data, newItem];
+    const recomputed = recomputeAll(newDataSet, cashLedger, marketConstants);
+    const comp = recomputed.find(r => r.id === newItem.id);
+    const filledItem: NavData = {
+      ...newItem,
+      nav1: comp?.adjNav ?? 0,
+      nav2: comp?.adjNav ?? 0,
+      shares: comp?.adjShares ?? 0,
+      cumulativeReturn: comp?.adjCumulativeReturn ?? 0,
+    };
+    onUpdate(newDataSet.map(d => d.id === newItem.id ? filledItem : d));
     setIsAdding(false);
     setNewRecord({ date: new Date().toISOString().split('T')[0], aum: 0, cashFlow: 0 });
   };
@@ -131,7 +177,22 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
       }
       return item;
     });
-    onUpdate(updatedData);
+    // Back-fill original columns for the edited record from newly computed adj values
+    const recomputed = recomputeAll(updatedData, cashLedger, marketConstants);
+    const filledData = updatedData.map(item => {
+      if (item.id === editingId) {
+        const comp = recomputed.find(r => r.id === editingId);
+        return {
+          ...item,
+          nav1: comp?.adjNav ?? item.nav1,
+          nav2: comp?.adjNav ?? item.nav2,
+          shares: comp?.adjShares ?? item.shares,
+          cumulativeReturn: comp?.adjCumulativeReturn ?? item.cumulativeReturn,
+        };
+      }
+      return item;
+    });
+    onUpdate(filledData);
     setEditingId(null);
     setEditRecord({});
   };
@@ -429,7 +490,9 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
           </div>
         </div>
         
-        {isAdding && (
+        {isAdding && (() => {
+            const ledgerHint = newRecord.date ? (ledgerFlowMap.get(newRecord.date.replace(/\//g, '-')) || 0) : 0;
+            return (
             <div className="p-4 bg-blue-50 border-b border-blue-100 flex flex-wrap items-center gap-3 animate-in slide-in-from-top-2">
                 <input
                     type="date"
@@ -447,20 +510,28 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
                         className="pl-7 pr-3 py-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-36"
                     />
                 </div>
-                <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                        type="number"
-                        placeholder="Cash Flow (+ deposit / − withdrawal)"
-                        value={newRecord.cashFlow || ''}
-                        onChange={e => setNewRecord({...newRecord, cashFlow: parseFloat(e.target.value) || 0})}
-                        className="pl-7 pr-3 py-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-52"
-                    />
+                <div className="flex flex-col gap-0.5">
+                    <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                        <input
+                            type="number"
+                            placeholder="Manual cash flow (optional)"
+                            value={newRecord.cashFlow || ''}
+                            onChange={e => setNewRecord({...newRecord, cashFlow: parseFloat(e.target.value) || 0})}
+                            className="pl-7 pr-3 py-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-52"
+                        />
+                    </div>
+                    {ledgerHint !== 0 && (
+                        <span className="text-[11px] text-indigo-600 font-medium px-1">
+                            Ledger: {ledgerHint > 0 ? '+' : ''}${ledgerHint.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} will be added automatically
+                        </span>
+                    )}
                 </div>
                 <button onClick={handleAdd} className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"><Save size={18} /></button>
                 <button onClick={() => setIsAdding(false)} className="p-2 text-slate-500 hover:bg-slate-200 rounded-lg"><X size={18} /></button>
             </div>
-        )}
+            );
+        })()}
 
         {/* Frozen header: outer div must have overflow-y-auto + fixed height so sticky thead works */}
         <div className="overflow-x-auto">
@@ -473,7 +544,7 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
                 <th className="px-4 py-3 whitespace-nowrap text-slate-400">NAV</th>
                 <th className="px-4 py-3 whitespace-nowrap text-slate-400">Cum. Return</th>
                 <th className="px-4 py-3 whitespace-nowrap text-slate-400">Shares</th>
-                <th className="px-4 py-3 whitespace-nowrap">Cash Flow</th>
+                <th className="px-4 py-3 whitespace-nowrap" title="Manual cash flow + Cash Ledger deposits/withdrawals">Cash Flow</th>
                 <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj NAV</th>
                 <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj Shares</th>
                 <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj Cum. Return</th>
@@ -514,20 +585,40 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
                     <td className="px-4 py-3 font-mono text-slate-400 whitespace-nowrap text-xs">
                         {item.shares ? Math.round(item.shares).toLocaleString() : '—'}
                     </td>
-                    {/* Cash Flow */}
-                    <td className={`px-4 py-3 font-mono whitespace-nowrap ${(item.cashFlow || 0) > 0 ? 'text-blue-600' : (item.cashFlow || 0) < 0 ? 'text-amber-600' : 'text-slate-400'}`}>
-                        {editingId === item.id ? (
-                            <input
+                    {/* Cash Flow — shows effective total (manual + ledger) */}
+                    {(() => {
+                      const normalizedDate = item.date.replace(/\//g, '-');
+                      const ledgerCF = ledgerFlowMap.get(normalizedDate) || 0;
+                      const manualCF = item.cashFlow || 0;
+                      const effectiveCF = manualCF + ledgerCF;
+                      return (
+                        <td className={`px-4 py-3 font-mono whitespace-nowrap ${effectiveCF > 0 ? 'text-blue-600' : effectiveCF < 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                          {editingId === item.id ? (
+                            <div className="flex flex-col gap-0.5">
+                              <input
                                 type="number"
                                 value={editRecord.cashFlow ?? 0}
                                 onChange={e => setEditRecord({...editRecord, cashFlow: parseFloat(e.target.value) || 0})}
                                 className="px-2 py-1 rounded border border-slate-300 w-32"
-                            />
-                        ) : (item.cashFlow && item.cashFlow !== 0)
-                            ? `${item.cashFlow > 0 ? '+' : ''}$${item.cashFlow.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
-                            : '—'
-                        }
-                    </td>
+                              />
+                              {ledgerCF !== 0 && (
+                                <span className="text-[10px] text-indigo-500">+Ledger: {ledgerCF > 0 ? '+' : ''}${ledgerCF.toLocaleString(undefined, {maximumFractionDigits: 2})}</span>
+                              )}
+                            </div>
+                          ) : effectiveCF !== 0 ? (
+                            <div className="flex flex-col leading-tight">
+                              <span>{effectiveCF > 0 ? '+' : ''}${effectiveCF.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                              {ledgerCF !== 0 && (
+                                <span className="text-[10px] text-indigo-400 font-normal">
+                                  {manualCF !== 0 ? `Manual ${manualCF > 0 ? '+' : ''}$${manualCF.toLocaleString(undefined, {maximumFractionDigits: 0})} · ` : ''}
+                                  Ledger {ledgerCF > 0 ? '+' : ''}${ledgerCF.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                </span>
+                              )}
+                            </div>
+                          ) : '—'}
+                        </td>
+                      );
+                    })()}
                     {/* Adjusted values */}
                     <td className="px-4 py-3 font-mono text-blue-700 font-semibold whitespace-nowrap">{(item.adjNav || 0).toFixed(4)}</td>
                     <td className="px-4 py-3 font-mono text-blue-600 whitespace-nowrap">
