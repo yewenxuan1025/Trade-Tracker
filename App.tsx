@@ -11,7 +11,7 @@ import SummaryDashboard from './components/SummaryDashboard';
 import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
-import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, generateId, calculatePortfolioAnalysis } from './services/excelService';
+import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis } from './services/excelService';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
 const STORAGE_KEY = 'trade_tracker_market_constants';
@@ -673,6 +673,7 @@ const App: React.FC = () => {
                 optionPosition={optionPosition}
                 cashLedger={cashLedger}
                 onCashTransaction={handleCashTransaction}
+                onExport={handleGlobalExport}
               />
             )}
             {activeTab === 'analytics' && (
@@ -747,7 +748,7 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'nav' && (
-              <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} cashLedger={cashLedger} marketConstants={marketConstants} />
+              <NavDashboard data={navData} onUpdate={setNavData} onUpload={(f) => handleSingleUpload('nav', f)} onExport={(computed) => exportNavData(computed)} cashLedger={cashLedger} marketConstants={marketConstants} />
             )}
             {activeTab === 'history' && (
               <HistoryDashboard

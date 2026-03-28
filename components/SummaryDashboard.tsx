@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { PnLData, MarketConstants, TransactionData, LookupSheetData, CashLedgerEntry, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
-import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
+import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, ArrowDownCircle, ArrowUpCircle, Download } from 'lucide-react';
 
 
 interface SummaryDashboardProps {
@@ -14,9 +14,10 @@ interface SummaryDashboardProps {
   optionPosition: number;
   cashLedger?: CashLedgerEntry[];
   onCashTransaction?: (entry: Omit<CashLedgerEntry, 'id'>) => void;
+  onExport?: () => void;
 }
 
-const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction }) => {
+const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction, onExport }) => {
 
   // Cash deposit/withdrawal modal state
   const [showCashModal, setShowCashModal] = useState(false);
@@ -413,9 +414,16 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                 </div>
                 <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Portfolio Overview</h2>
               </div>
-              <button onClick={() => setShowReviewTable(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${showReviewTable ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-                <TableIcon size={14} />Review
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setShowReviewTable(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${showReviewTable ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                  <TableIcon size={14} />Review
+                </button>
+                {onExport && (
+                  <button onClick={onExport} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 transition-all">
+                    <Download size={14} />Export
+                  </button>
+                )}
+              </div>
            </div>
 
            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden max-w-2xl">

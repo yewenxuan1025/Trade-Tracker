@@ -780,6 +780,26 @@ export const exportPnLToExcel = (pnlData: PnLData[], marketConstants?: MarketCon
     XLSX.writeFile(workbook, fileName);
 };
 
+export const exportNavData = (navData: NavData[], fileName: string = 'NAV_Export.xlsx') => {
+    const navExportMap: Record<string, string> = {
+        date: 'Date',
+        aum: 'AUM',
+        nav1: 'NAV (Original)',
+        cumulativeReturn: 'Cumulative Return (Original)',
+        shares: 'Shares (Original)',
+        cashFlow: 'Cash Flow',
+        adjNav: 'Adj NAV',
+        adjShares: 'Adj Shares',
+        adjCumulativeReturn: 'Adj Cumulative Return',
+    };
+    const mapped = mapToExport(navData, navExportMap);
+    const ws = XLSX.utils.json_to_sheet(mapped);
+    formatWorksheet(ws, mapped);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, ws, 'NAV');
+    XLSX.writeFile(workbook, fileName);
+};
+
 export const calculatePortfolioAnalysis = (
     pnlData: PnLData[], 
     transactions: TransactionData[], 

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Edit2, Save, X, Trash2, TrendingUp, Upload, Calendar, Expand } from 'lucide-react';
+import { Plus, Edit2, Save, X, Trash2, TrendingUp, Upload, Calendar, Expand, Download } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import { NavData, CashLedgerEntry, MarketConstants } from '../types';
 import { generateId } from '../services/excelService';
@@ -26,51 +26,56 @@ interface NavDashboardProps {
   data: NavData[];
   onUpdate: (data: NavData[]) => void;
   onUpload: (file: File) => void;
+  onExport?: (data: NavData[]) => void;
   cashLedger?: CashLedgerEntry[];
   marketConstants?: MarketConstants;
 }
 
 const INITIAL_SHARES = 600_000;
 
-/** Recompute shares, nav1, nav2, cumulativeReturn for every row from AUM + cashFlow.
+/** Compute adjusted NAV fields from AUM + cashFlow without overwriting original file values.
  *  Formula:
- *    Day 0  → shares = 600,000 ; adjNAV = AUM / 600,000
- *    Day N (cashFlow = 0) → shares unchanged ; adjNAV = AUM / shares
- *    Day N (cashFlow ≠ 0) → adjNAV = (AUM − cashFlow) / prevShares
- *                            newShares = prevShares + cashFlow / adjNAV
- *                            adjNAV = AUM / newShares  (self-consistent by algebra)
+ *    Day 0  → adjShares = 600,000 ; adjNav = AUM / 600,000
+ *    Day N (cashFlow = 0) → adjShares = prevAdjShares ; adjNav = AUM / adjShares
+ *    Day N (cashFlow ≠ 0) → sharesIssued = cashFlow / prevAdjNav (previous day's NAV)
+ *                            adjShares = prevAdjShares + sharesIssued
+ *                            adjNav = AUM / adjShares
+ *  Original nav1, shares, cumulativeReturn from the uploaded file are preserved.
  */
 const recomputeAll = (rawData: NavData[]): NavData[] => {
   const sorted = [...rawData].sort((a, b) =>
     new Date(a.date.replace(/\//g, '-')).getTime() - new Date(b.date.replace(/\//g, '-')).getTime()
   );
-  let prevShares = INITIAL_SHARES;
-  let baseNav = 1;
+  let prevAdjShares = INITIAL_SHARES;
+  let prevAdjNav = 1;
+  let baseAdjNav = 1;
   return sorted.map((item, index) => {
     const cashFlow = item.cashFlow || 0;
-    let shares: number;
+    let adjShares: number;
     let adjNav: number;
     if (index === 0) {
-      shares = INITIAL_SHARES;
+      adjShares = INITIAL_SHARES;
       adjNav = INITIAL_SHARES > 0 ? item.aum / INITIAL_SHARES : 1;
-      baseNav = adjNav;
+      baseAdjNav = adjNav;
     } else if (cashFlow !== 0) {
-      // Algebraically: adjNAV*(prevShares + cashFlow/adjNAV) = AUM  ⟹  adjNAV = (AUM−cashFlow)/prevShares
-      adjNav = prevShares > 0 ? (item.aum - cashFlow) / prevShares : 1;
-      if (adjNav <= 0) adjNav = 1e-6;
-      shares = prevShares + cashFlow / adjNav;
+      // New shares issued at previous day's NAV
+      const sharesIssued = prevAdjNav > 0 ? cashFlow / prevAdjNav : 0;
+      adjShares = prevAdjShares + sharesIssued;
+      adjNav = adjShares > 0 ? item.aum / adjShares : 1;
     } else {
-      shares = prevShares;
-      adjNav = shares > 0 ? item.aum / shares : 1;
+      adjShares = prevAdjShares;
+      adjNav = adjShares > 0 ? item.aum / adjShares : 1;
     }
-    prevShares = shares;
-    const cumReturn = baseNav !== 0 ? (adjNav - baseNav) / baseNav : 0;
-    return { ...item, shares, nav1: adjNav, nav2: adjNav, cumulativeReturn: cumReturn };
+    prevAdjShares = adjShares;
+    prevAdjNav = adjNav;
+    const adjCumulativeReturn = baseAdjNav !== 0 ? (adjNav - baseAdjNav) / baseAdjNav : 0;
+    // Keep original file values (nav1, shares, cumulativeReturn); add adj fields separately
+    return { ...item, adjNav, adjShares, adjCumulativeReturn };
   });
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, cashLedger: _cashLedger, marketConstants: _marketConstants }) => {
+const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, onExport, cashLedger: _cashLedger, marketConstants: _marketConstants }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newRecord, setNewRecord] = useState<Partial<NavData>>({ date: new Date().toISOString().split('T')[0], aum: 0, cashFlow: 0 });
@@ -95,8 +100,8 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
     if (!periodStart || sortedData.length === 0) return null;
     const startRecord = sortedData.find(d => d.date >= periodStart);
     const endRecord = [...sortedData].reverse().find(d => d.date <= periodEnd);
-    if (!startRecord || !endRecord || startRecord.nav2 === 0) return null;
-    return (endRecord.nav2 - startRecord.nav2) / startRecord.nav2;
+    if (!startRecord || !endRecord || !startRecord.adjNav) return null;
+    return ((endRecord.adjNav || 0) - startRecord.adjNav) / startRecord.adjNav;
   }, [sortedData, periodStart, periodEnd]);
 
   const handleAdd = () => {
@@ -146,20 +151,20 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
     setEditRecord({ date: item.date, aum: item.aum, cashFlow: item.cashFlow ?? 0 });
   };
 
-  // Chart Data
+  // Chart Data (uses adjusted values)
   const chartData = sortedData.map(item => ({
     date: item.date,
     aum: item.aum,
-    cumulativeReturn: item.cumulativeReturn * 100 // Convert to %
+    cumulativeReturn: (item.adjCumulativeReturn || 0) * 100 // Convert to %
   }));
 
-  // NAV-based Cumulative Return & Drawdown (simple return from base NAV)
+  // NAV-based Cumulative Return & Drawdown (uses adjusted NAV)
   const navReturnData = useMemo(() => {
     if (sortedData.length === 0) return [];
-    const base = sortedData[0].nav1 || sortedData[0].nav2 || 1;
+    const base = sortedData[0].adjNav || 1;
     let peakNav = base;
     return sortedData.map(n => {
-      const nav = n.nav1 || n.nav2 || base;
+      const nav = n.adjNav || base;
       peakNav = Math.max(peakNav, nav);
       return {
         date: n.date,
@@ -169,14 +174,14 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
     });
   }, [sortedData]);
 
-  // NAV-based Heatmap (frequency-aware, date-format-safe)
+  // NAV-based Heatmap (frequency-aware, date-format-safe, uses adjusted NAV)
   const navHeatmap = useMemo(() => {
     if (sortedData.length === 0) return { cells: [], years: [], columns: [] };
     const periodMap = new Map<string, { first: number; last: number }>();
     sortedData.forEach(n => {
       const key = getNavFreqKey(n.date, navHeatFreq);
       if (!key) return;
-      const nav = n.nav1 || n.nav2 || 1;
+      const nav = n.adjNav || 1;
       if (!periodMap.has(key)) periodMap.set(key, { first: nav, last: nav });
       else periodMap.get(key)!.last = nav;
     });
@@ -242,14 +247,14 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
                         <p className="text-2xl font-bold text-slate-800">${(sortedData[sortedData.length - 1]?.aum || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
                     </div>
                     <div>
-                        <p className="text-sm text-slate-400">Cumulative Return</p>
-                        <p className={`text-2xl font-bold ${(sortedData[sortedData.length - 1]?.cumulativeReturn || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                            {((sortedData[sortedData.length - 1]?.cumulativeReturn || 0) * 100).toFixed(2)}%
+                        <p className="text-sm text-slate-400">Adj Cumulative Return</p>
+                        <p className={`text-2xl font-bold ${(sortedData[sortedData.length - 1]?.adjCumulativeReturn || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                            {((sortedData[sortedData.length - 1]?.adjCumulativeReturn || 0) * 100).toFixed(2)}%
                         </p>
                     </div>
                     <div>
-                        <p className="text-sm text-slate-400">Latest NAV</p>
-                        <p className="text-2xl font-bold text-slate-800">{(sortedData[sortedData.length - 1]?.nav2 || 0).toFixed(4)}</p>
+                        <p className="text-sm text-slate-400">Latest Adj NAV</p>
+                        <p className="text-2xl font-bold text-slate-800">{(sortedData[sortedData.length - 1]?.adjNav || 0).toFixed(4)}</p>
                     </div>
                 </div>
             </div>
@@ -413,6 +418,11 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
               <Upload size={16} /><span>Upload</span>
               <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
             </label>
+            {onExport && (
+              <button onClick={() => onExport(sortedData)} className="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                <Download size={16} /><span>Export</span>
+              </button>
+            )}
             <button onClick={() => setIsAdding(true)} className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
               <Plus size={16} /><span>Add Record</span>
             </button>
@@ -458,22 +468,25 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
           <table className="w-full text-sm text-left">
             <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200 sticky top-0 z-10">
               <tr>
-                <th className="px-6 py-4 whitespace-nowrap">Date</th>
-                <th className="px-6 py-4 whitespace-nowrap">AUM</th>
-                <th className="px-6 py-4 whitespace-nowrap">Cash Flow</th>
-                <th className="px-6 py-4 whitespace-nowrap">Adj NAV</th>
-                <th className="px-6 py-4 whitespace-nowrap">Cumulative Return</th>
-                <th className="px-6 py-4 whitespace-nowrap">Adj Shares</th>
-                <th className="px-6 py-4 text-right whitespace-nowrap">Actions</th>
+                <th className="px-4 py-3 whitespace-nowrap">Date</th>
+                <th className="px-4 py-3 whitespace-nowrap">AUM</th>
+                <th className="px-4 py-3 whitespace-nowrap text-slate-400">NAV</th>
+                <th className="px-4 py-3 whitespace-nowrap text-slate-400">Cum. Return</th>
+                <th className="px-4 py-3 whitespace-nowrap text-slate-400">Shares</th>
+                <th className="px-4 py-3 whitespace-nowrap">Cash Flow</th>
+                <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj NAV</th>
+                <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj Shares</th>
+                <th className="px-4 py-3 whitespace-nowrap text-blue-600">Adj Cum. Return</th>
+                <th className="px-4 py-3 text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {sortedData.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-8 text-center text-slate-400">No NAV records found. Upload a file or add a record.</td></tr>
+                <tr><td colSpan={10} className="px-6 py-8 text-center text-slate-400">No NAV records found. Upload a file or add a record.</td></tr>
               ) : (
                 [...sortedData].reverse().map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-6 py-4 font-medium text-slate-900 whitespace-nowrap">
+                    <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
                         {editingId === item.id ? (
                             <input
                                 type="date"
@@ -483,7 +496,7 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
                             />
                         ) : item.date}
                     </td>
-                    <td className="px-6 py-4 font-mono text-slate-600 whitespace-nowrap">
+                    <td className="px-4 py-3 font-mono text-slate-600 whitespace-nowrap">
                         {editingId === item.id ? (
                             <input
                                 type="number"
@@ -493,7 +506,16 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
                             />
                         ) : `$${item.aum.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}
                     </td>
-                    <td className={`px-6 py-4 font-mono whitespace-nowrap ${(item.cashFlow || 0) > 0 ? 'text-blue-600' : (item.cashFlow || 0) < 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                    {/* Original values from file */}
+                    <td className="px-4 py-3 font-mono text-slate-400 whitespace-nowrap text-xs">{item.nav1 ? item.nav1.toFixed(4) : '—'}</td>
+                    <td className={`px-4 py-3 font-mono whitespace-nowrap text-xs ${(item.cumulativeReturn || 0) >= 0 ? 'text-slate-400' : 'text-slate-400'}`}>
+                        {item.cumulativeReturn != null ? `${(item.cumulativeReturn * 100).toFixed(2)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-slate-400 whitespace-nowrap text-xs">
+                        {item.shares ? Math.round(item.shares).toLocaleString() : '—'}
+                    </td>
+                    {/* Cash Flow */}
+                    <td className={`px-4 py-3 font-mono whitespace-nowrap ${(item.cashFlow || 0) > 0 ? 'text-blue-600' : (item.cashFlow || 0) < 0 ? 'text-amber-600' : 'text-slate-400'}`}>
                         {editingId === item.id ? (
                             <input
                                 type="number"
@@ -506,14 +528,15 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, c
                             : '—'
                         }
                     </td>
-                    <td className="px-6 py-4 font-mono text-slate-600 whitespace-nowrap">{(item.nav2 || 0).toFixed(4)}</td>
-                    <td className={`px-6 py-4 font-mono font-medium whitespace-nowrap ${(item.cumulativeReturn || 0) >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                        {((item.cumulativeReturn || 0) * 100).toFixed(2)}%
+                    {/* Adjusted values */}
+                    <td className="px-4 py-3 font-mono text-blue-700 font-semibold whitespace-nowrap">{(item.adjNav || 0).toFixed(4)}</td>
+                    <td className="px-4 py-3 font-mono text-blue-600 whitespace-nowrap">
+                        {Math.round(item.adjShares || 0).toLocaleString()}
                     </td>
-                    <td className="px-6 py-4 font-mono text-slate-500 whitespace-nowrap">
-                        {Math.round(item.shares).toLocaleString()}
+                    <td className={`px-4 py-3 font-mono font-semibold whitespace-nowrap ${(item.adjCumulativeReturn || 0) >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                        {((item.adjCumulativeReturn || 0) * 100).toFixed(2)}%
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-4 py-3 text-right">
                         {editingId === item.id ? (
                             <div className="flex justify-end space-x-2">
                                 <button onClick={handleSaveEdit} className="text-emerald-600 hover:bg-emerald-50 p-1 rounded"><Save size={16} /></button>

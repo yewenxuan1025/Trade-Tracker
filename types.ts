@@ -252,6 +252,10 @@ export interface NavData {
   shares: number;
   nav2: number;
   cashFlow?: number;
+  // Computed adjusted fields (not stored in Excel, derived from cashFlow)
+  adjNav?: number;
+  adjShares?: number;
+  adjCumulativeReturn?: number;
 }
 
 export const NAV_HEADER_MAP: Record<string, keyof NavData> = {
