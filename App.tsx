@@ -619,6 +619,7 @@ const App: React.FC = () => {
         analysis.detailedHoldingsExport, analysis.weightedAvgs,
         navData, optionTransactions,
         dividendData, interestData, cashLedger,
+        'TradeTracker_Pro_Export.xlsx',
         benchmarkData
     );
   };
