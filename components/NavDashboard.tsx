@@ -136,7 +136,7 @@ const recomputeAll = (
     if (index === 0) {
       adjShares = INITIAL_SHARES;
       adjNav = INITIAL_SHARES > 0 ? item.aum / INITIAL_SHARES : 1;
-      baseAdjNav = adjNav;
+      // baseAdjNav stays at 1 — inception NAV is 1, so cumReturn reflects total gain from launch
     } else if (effectiveCF !== 0) {
       // New shares issued at previous day's NAV
       const sharesIssued = prevAdjNav > 0 ? effectiveCF / prevAdjNav : 0;
