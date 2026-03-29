@@ -56,22 +56,51 @@ const buildLedgerFlowMap = (
   return map;
 };
 
-/** Compute the SIMPLE (non-adjusted) NAV columns for manually-entered records.
- *  Shares are held constant at INITIAL_SHARES — no cash-flow dilution.
- *    nav1 = AUM / INITIAL_SHARES  (constant shares)
- *    cumulativeReturn = (nav1 − baseNav) / baseNav  (from first record)
- *  This is independent of the adj calculation and must NOT use cashFlow.
+/** Compute the SIMPLE (non-adjusted) NAV columns.
+ *  Shares CARRY FORWARD from the previous record — never reset to INITIAL_SHARES.
+ *  Inception NAV is back-calculated from the first uploaded record that has a
+ *  non-zero cumulativeReturn, so manually-added records are consistent.
+ *
+ *  A record is (re-)computed when:
+ *    • item.shares === 0  (new, never had shares set), OR
+ *    • item.nav1   === 0  (new, never had NAV set), OR
+ *    • item.shares === INITIAL_SHARES but the previous record had different shares
+ *      (indicates a previous wrong auto-fill that used the constant default)
+ *
+ *  Uploaded records with valid nav1 and consistent shares are returned unchanged.
  */
 const computeSimpleAll = (rawData: NavData[]): NavData[] => {
   const sorted = [...rawData].sort((a, b) =>
     new Date(a.date.replace(/\//g, '-')).getTime() - new Date(b.date.replace(/\//g, '-')).getTime()
   );
-  let baseNav = 0;
-  return sorted.map((item, index) => {
-    const nav1 = INITIAL_SHARES > 0 ? item.aum / INITIAL_SHARES : 1;
-    if (index === 0) baseNav = nav1;
-    const cumulativeReturn = baseNav !== 0 ? (nav1 - baseNav) / baseNav : 0;
-    return { ...item, nav1, nav2: nav1, shares: INITIAL_SHARES, cumulativeReturn };
+
+  // Back-calculate inception NAV from first record with non-zero cumulativeReturn
+  let inceptionNav = 0;
+  for (const item of sorted) {
+    if (item.nav1 > 0) {
+      if (item.cumulativeReturn && item.cumulativeReturn !== 0) {
+        inceptionNav = item.nav1 / (1 + item.cumulativeReturn);
+        break;
+      }
+      if (inceptionNav === 0) inceptionNav = item.nav1;
+    }
+  }
+  if (inceptionNav <= 0) inceptionNav = 1;
+
+  let prevShares = INITIAL_SHARES;
+  return sorted.map(item => {
+    const carryShares = prevShares;
+    const shares = item.shares > 0 ? item.shares : carryShares;
+    prevShares = shares;
+
+    const wrongDefault = item.shares === INITIAL_SHARES && carryShares !== INITIAL_SHARES;
+    const needsRecompute = item.nav1 === 0 || item.shares === 0 || wrongDefault;
+
+    if (!needsRecompute) return item;
+
+    const nav1 = shares > 0 ? item.aum / shares : 1;
+    const cumulativeReturn = inceptionNav > 0 ? (nav1 - inceptionNav) / inceptionNav : 0;
+    return { ...item, nav1, nav2: nav1, shares, cumulativeReturn };
   });
 };
 
@@ -166,18 +195,14 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
       shares: 0, nav1: 0, nav2: 0, cumulativeReturn: 0,
     };
     const newDataSet = [...data, newItem];
-    // Original columns: simple constant-share formula (independent of cash flows)
+    // Recompute original columns for ALL records (carry-forward shares)
     const simpleResult = computeSimpleAll(newDataSet);
-    const simpleItem = simpleResult.find(r => r.id === newItem.id);
-    const filledItem: NavData = {
-      ...newItem,
-      nav1: simpleItem?.nav1 ?? 0,
-      nav2: simpleItem?.nav2 ?? 0,
-      shares: simpleItem?.shares ?? INITIAL_SHARES,
-      cumulativeReturn: simpleItem?.cumulativeReturn ?? 0,
-      // adjNav/adjShares/adjCumulativeReturn are computed on-the-fly in sortedData useMemo
-    };
-    onUpdate(newDataSet.map(d => d.id === newItem.id ? filledItem : d));
+    const simpleById = new Map(simpleResult.map(r => [r.id, r]));
+    onUpdate(newDataSet.map(d => {
+      const s = simpleById.get(d.id);
+      if (!s) return d;
+      return { ...d, nav1: s.nav1, nav2: s.nav2, shares: s.shares, cumulativeReturn: s.cumulativeReturn };
+    }));
     setIsAdding(false);
     setNewRecord({ date: new Date().toISOString().split('T')[0], aum: 0, cashFlow: 0 });
   };
@@ -195,22 +220,14 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
       }
       return item;
     });
-    // Recompute original columns using simple constant-share formula (no cash-flow effect)
+    // Recompute original columns for ALL records (carry-forward shares)
     const simpleResult = computeSimpleAll(updatedData);
-    const filledData = updatedData.map(item => {
-      if (item.id === editingId) {
-        const simpleItem = simpleResult.find(r => r.id === editingId);
-        return {
-          ...item,
-          nav1: simpleItem?.nav1 ?? item.nav1,
-          nav2: simpleItem?.nav2 ?? item.nav2,
-          shares: simpleItem?.shares ?? item.shares,
-          cumulativeReturn: simpleItem?.cumulativeReturn ?? item.cumulativeReturn,
-        };
-      }
-      return item;
-    });
-    onUpdate(filledData);
+    const simpleById = new Map(simpleResult.map(r => [r.id, r]));
+    onUpdate(updatedData.map(item => {
+      const s = simpleById.get(item.id);
+      if (!s) return item;
+      return { ...item, nav1: s.nav1, nav2: s.nav2, shares: s.shares, cumulativeReturn: s.cumulativeReturn };
+    }));
     setEditingId(null);
     setEditRecord({});
   };
