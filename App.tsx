@@ -21,6 +21,7 @@ const OPTION_TRANSACTION_DATA_KEY = 'trade_tracker_option_txn_data';
 const PNL_DATA_KEY = 'trade_tracker_pnl_data';
 const NAV_DATA_KEY = 'trade_tracker_nav_data';
 const CASH_POSITION_KEY = 'trade_tracker_cash_pos';
+const CASH_ADJUSTMENT_KEY = 'trade_tracker_cash_adj';
 const DIVIDEND_DATA_KEY = 'trade_tracker_dividends';
 const INTEREST_DATA_KEY = 'trade_tracker_interest';
 const CASH_LEDGER_KEY = 'trade_tracker_cash_ledger';
@@ -67,8 +68,14 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { date: new Date().toISOString().split('T')[0], exg_rate: 7.8, aud_exg: 1.5, sg_exg: 1.3 };
   });
 
+  // Auto-calculated cash position (from ledger + PnL + transactions)
   const [cashPosition, setCashPosition] = useState<number>(() => {
       const saved = localStorage.getItem(CASH_POSITION_KEY);
+      return saved ? parseFloat(saved) : 0;
+  });
+  // Manual adjustment on top of auto-calc (persists across recalculations)
+  const [cashAdjustment, setCashAdjustment] = useState<number>(() => {
+      const saved = localStorage.getItem(CASH_ADJUSTMENT_KEY);
       return saved ? parseFloat(saved) : 0;
   });
 
@@ -110,6 +117,7 @@ const App: React.FC = () => {
   useEffect(() => localStorage.setItem(PNL_DATA_KEY, JSON.stringify(pnlData)), [pnlData]);
   useEffect(() => localStorage.setItem(NAV_DATA_KEY, JSON.stringify(navData)), [navData]);
   useEffect(() => localStorage.setItem(CASH_POSITION_KEY, String(cashPosition)), [cashPosition]);
+  useEffect(() => localStorage.setItem(CASH_ADJUSTMENT_KEY, String(cashAdjustment)), [cashAdjustment]);
   useEffect(() => localStorage.setItem(DIVIDEND_DATA_KEY, JSON.stringify(dividendData)), [dividendData]);
   useEffect(() => localStorage.setItem(INTEREST_DATA_KEY, JSON.stringify(interestData)), [interestData]);
   useEffect(() => localStorage.setItem(CASH_LEDGER_KEY, JSON.stringify(cashLedger)), [cashLedger]);
@@ -603,17 +611,20 @@ const App: React.FC = () => {
         }
         else if (section === 'option_transaction') setOptionTransactions(result.optionTransactions);
         else if (section === 'pnl') setPnlData(result.pnl);
-        else if (section === 'nav') setNavData(result.navData);
+        else if (section === 'nav') { if (result.navData.length > 0) setNavData(result.navData); }
     } catch (e) { showToast("Error uploading " + section + ": " + (e as Error).message, 'error'); }
   };
 
+  // Effective cash = auto-calculated base + manual adjustment
+  const effectiveCash = cashPosition + cashAdjustment;
+
   const handleGlobalExport = () => {
-    const analysis = calculatePortfolioAnalysis(pnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition);
+    const analysis = calculatePortfolioAnalysis(pnlData, transactions, lookupData, marketConstants, effectiveCash, optionPosition);
     const historyHk = analysis.g1Hk.filter(s => s.IsZero);
     const historyNonHk = analysis.g1NonHk.filter(s => s.IsZero);
 
     exportGlobalData(
-        transactions, pnlData, lookupData, marketConstants, cashPosition, optionPosition,
+        transactions, pnlData, lookupData, marketConstants, effectiveCash, optionPosition,
         analysis.g2Hk, analysis.g2Ccs, analysis.g2Us,
         historyHk, historyNonHk,
         analysis.detailedHoldingsExport, analysis.weightedAvgs,
@@ -668,8 +679,8 @@ const App: React.FC = () => {
                 transactions={transactions}
                 lookupData={lookupData}
                 marketConstants={marketConstants}
-                cashPosition={cashPosition}
-                onUpdateCash={setCashPosition}
+                cashPosition={effectiveCash}
+                onUpdateCash={(val) => setCashAdjustment(val - cashPosition)}
                 optionPosition={optionPosition}
                 cashLedger={cashLedger}
                 onCashTransaction={handleCashTransaction}
@@ -683,7 +694,7 @@ const App: React.FC = () => {
                 lookupData={lookupData}
                 marketConstants={marketConstants}
                 navData={navData}
-                cashPosition={cashPosition}
+                cashPosition={effectiveCash}
                 optionPosition={optionPosition}
                 benchmarkData={benchmarkData}
                 onBenchmarkUpload={handleBenchmarkUpload}
@@ -756,7 +767,7 @@ const App: React.FC = () => {
                 transactions={transactions}
                 lookupData={lookupData}
                 marketConstants={marketConstants}
-                cashPosition={cashPosition}
+                cashPosition={effectiveCash}
                 optionPosition={optionPosition}
               />
             )}
