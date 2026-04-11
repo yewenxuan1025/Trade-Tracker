@@ -512,7 +512,7 @@ const NavDashboard: React.FC<NavDashboardProps> = ({ data, onUpdate, onUpload, o
           <div className="flex items-center space-x-2">
             <label className="flex items-center space-x-2 px-4 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer">
               <Upload size={16} /><span>Upload</span>
-              <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
+              <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); e.target.value = ''; }} />
             </label>
             {onExport && (
               <button onClick={() => onExport(sortedData)} className="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">

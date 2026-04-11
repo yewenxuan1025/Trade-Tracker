@@ -387,8 +387,11 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {[
-                  // HK: sort numerically
-                  ...[...group2.hk].sort((a, b) => parseInt(a.stock || '0', 10) - parseInt(b.stock || '0', 10)),
+                  // HK: sort by first non-zero digit sequence (handles leading zeros and letter prefixes)
+                  ...[...group2.hk].sort((a, b) => {
+                    const getKey = (s: string) => { const m = (s || '').match(/[1-9]\d*/); return m ? parseInt(m[0], 10) : 0; };
+                    return getKey(a.stock) - getKey(b.stock);
+                  }),
                   // Others: sort alphabetically
                   ...[...group2.ccs, ...group2.us, ...group2.aus].sort((a, b) => a.stock.localeCompare(b.stock)),
                 ].map(h => (

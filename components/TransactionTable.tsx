@@ -74,6 +74,10 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
     stock: '', name: '', market: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No'
   });
 
+  // Raw string states for shares inputs so the user can type '-' before digits
+  const [txnSharesStr, setTxnSharesStr] = useState('0');
+  const [optionSharesStr, setOptionSharesStr] = useState('0');
+
   const { showToast } = useToast();
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
@@ -254,7 +258,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const handleFormSubmit = (e: React.FormEvent, isOption = false) => {
       e.preventDefault();
       const form = isOption ? optionForm : txnForm;
-      const shares = form.shares || 0;
+      const shares = parseFloat(isOption ? optionSharesStr : txnSharesStr) || 0;
       const price = form.price || 0;
       const commission = form.commission || 0;
       const action = (form.action || 'Buy').toLowerCase();
@@ -335,12 +339,12 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div className="flex gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Upload size={14} /><span>Upload</span></button>
                   {onAppend && <button onClick={() => appendInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Plus size={14} /><span>Append</span></button>}
-                  <button onClick={() => { setEditingId(null); setTxnForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS' }); setIsModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Record</span></button>
+                  <button onClick={() => { setEditingId(null); setTxnForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS' }); setTxnSharesStr(''); setIsModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Record</span></button>
                   
                   {selectedIds.size === 1 && (
                     <>
                       <button onClick={() => { const id = Array.from(selectedIds)[0]; onDuplicateTransaction(id); setSelectedIds(new Set()); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Copy size={14} /><span>Duplicate</span></button>
-                      <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setTxnForm({...txn}); setIsModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
+                      <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setTxnForm({...txn}); setTxnSharesStr(String(txn.shares)); setIsModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
                       <button onClick={() => { const id = Array.from(selectedIds)[0]; const txn = transactions.find(t => t.id === id); if(txn) { setEditingId(txn.id); setIsSplitModalOpen(true); } }} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Scissors size={14} /><span>Split</span></button>
                     </>
                   )}
@@ -411,10 +415,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => optionFileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Upload size={14} /><span>Upload History</span></button>
-                  <button onClick={() => { setEditingOptionId(null); setOptionForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No' }); setIsOptionModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Option</span></button>
+                  <button onClick={() => { setEditingOptionId(null); setOptionForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No' }); setOptionSharesStr(''); setIsOptionModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Option</span></button>
                   
                   {selectedOptionIds.size === 1 && (
-                     <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
+                    <>
+                      <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setOptionSharesStr(String(txn.shares)); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
+                      <button onClick={() => handleBulkDelete(true)} className="p-1.5 bg-white border border-red-200 rounded-lg text-red-500 hover:bg-red-50 transition-colors shadow-sm"><Trash2 size={14}/></button>
+                    </>
                   )}
                   {selectedOptionIds.size === 2 && onCreateOptionPnL && (
                     <div className="flex items-center gap-1.5">
@@ -495,7 +502,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Company Name</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-400 italic" value={txnForm.name || ''}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Market</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-400 italic" value={txnForm.market || ''}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price</label><input required type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.price} onChange={e => setTxnForm({...txnForm, price: parseFloat(e.target.value)})}/></div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Shares</label><input required type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.shares} onChange={e => setTxnForm({...txnForm, shares: parseFloat(e.target.value)})}/></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Shares</label><input required type="text" inputMode="decimal" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnSharesStr} onChange={e => setTxnSharesStr(e.target.value)}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Date</label><input required type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.date} onChange={e => setTxnForm({...txnForm, date: e.target.value})}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Commission</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.commission} onChange={e => setTxnForm({...txnForm, commission: parseFloat(e.target.value)})}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Source</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.source} onChange={e => setTxnForm({...txnForm, source: e.target.value})}><option value="IB AUS">IB AUS</option><option value="IB">IB</option><option value="Vanguard">Vanguard</option><option value="Manual">Manual</option></select></div>
@@ -528,7 +535,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Strike Price</label><input type="number" step="0.5" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.strike} onChange={e => setOptionForm({...optionForm, strike: parseFloat(e.target.value)})}/></div>
                 
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Action</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.action} onChange={e => setOptionForm({...optionForm, action: e.target.value})}><option value="Buy">Buy</option><option value="Sell">Sell</option></select></div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Shares/Contracts</label><input required type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.shares} onChange={e => setOptionForm({...optionForm, shares: parseFloat(e.target.value)})}/></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Shares/Contracts</label><input required type="text" inputMode="decimal" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionSharesStr} onChange={e => setOptionSharesStr(e.target.value)}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price (Prem)</label><input required type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.price} onChange={e => setOptionForm({...optionForm, price: parseFloat(e.target.value)})}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Exercise</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.exercise} onChange={e => setOptionForm({...optionForm, exercise: e.target.value})}>{EXERCISE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}</select></div>
                 

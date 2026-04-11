@@ -527,6 +527,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     month: parseNumeric(row['Month']),
                     expiration: row['Expiration'] ? parseExcelDate(row['Expiration']) : undefined,
                     strike: row['Strike'] ? parseNumeric(row['Strike']) : undefined,
+                    // 'Action' column maps to optionAction (global export uses 'Action' header; direct export uses 'optionAction')
+                    optionAction: row['Action'] || row['optionAction'] || undefined,
                     // Explicitly ignore target columns from Excel to force recalculation in app
                     tgtProfitCost: undefined,
                     tgtProfitSales: undefined,
