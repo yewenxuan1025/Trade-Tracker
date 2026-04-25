@@ -7,6 +7,7 @@ import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, Arrow
 interface SummaryDashboardProps {
   pnlData: PnLData[];
   transactions: TransactionData[];
+  optionTransactions?: TransactionData[];
   lookupData: LookupSheetData | null;
   marketConstants: MarketConstants;
   cashPosition: number;
@@ -17,7 +18,7 @@ interface SummaryDashboardProps {
   onExport?: () => void;
 }
 
-const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction, onExport }) => {
+const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, optionTransactions = [], lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction, onExport }) => {
 
   // Cash deposit/withdrawal modal state
   const [showCashModal, setShowCashModal] = useState(false);
@@ -244,6 +245,61 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       rawDetailedHoldings: detailedHoldings
     };
   }, [pnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition]);
+
+  // Option summary by ticker (consistent with stock holdings — group by ticker, not by Call/Put or strike)
+  const optionSummary = useMemo(() => {
+    if (!optionTransactions || optionTransactions.length === 0) return [] as any[];
+
+    type Agg = { stock: string; name: string; market: string; netContracts: number; totalCashFlowLocal: number };
+    const byTicker = new Map<string, Agg>();
+
+    optionTransactions.forEach(t => {
+      const stock = (t.stock || '').toUpperCase().trim();
+      if (!stock) return;
+      const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === stock);
+      const market = (t.market || lu?.market || 'US').toUpperCase();
+      const name = lu?.companyName || t.name || stock;
+      const action = (t.action || '').toLowerCase();
+      const shares = Math.abs(t.shares || 0);
+      const signedContracts = action.includes('buy') ? shares : -shares;
+
+      const cur = byTicker.get(stock) || { stock, name, market, netContracts: 0, totalCashFlowLocal: 0 };
+      cur.name = name; // refresh from lookup if available
+      cur.market = market;
+      cur.netContracts += signedContracts;
+      cur.totalCashFlowLocal += (t.total || 0);
+      byTicker.set(stock, cur);
+    });
+
+    const rate = (mkt: string) => {
+      const m = mkt.toUpperCase();
+      if (m === 'HK') return marketConstants.exg_rate;
+      if (m === 'SG') return marketConstants.sg_exg;
+      if (m === 'AUD' || m === 'AUS') return marketConstants.aud_exg;
+      return 1;
+    };
+
+    const rows = Array.from(byTicker.values()).map(a => {
+      const r = rate(a.market) || 1;
+      const totalCostUsd = a.totalCashFlowLocal / r;       // signed cash flow in USD (buy = negative)
+      const lastMvUsd = -a.totalCashFlowLocal / r;          // long (net buy) → positive MV; short (net sell) → negative MV
+      return {
+        stock: a.stock,
+        name: a.name,
+        market: a.market,
+        netContracts: a.netContracts,
+        totalCostUsd,
+        lastMvUsd,
+      };
+    });
+
+    // Drop fully-closed tickers (no net contracts AND zero net cashflow) – avoids cluttering the section.
+    const open = rows.filter(r => Math.abs(r.netContracts) > 0.0001 || Math.abs(r.totalCostUsd) > 0.005);
+    open.sort((a, b) => a.stock.localeCompare(b.stock));
+    return open;
+  }, [optionTransactions, lookupData, marketConstants]);
+
+  const optionSummaryTotalMv = useMemo(() => optionSummary.reduce((s, r) => s + r.lastMvUsd, 0), [optionSummary]);
 
   // Second Memo: Filtering and Weighted Average Calculation
   const { filteredHoldings, weightedAvgs } = useMemo(() => {
@@ -740,7 +796,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
           { title: 'HK Holdings', data: group2.hk, currency: 'HKD' },
           { title: 'CCS Holdings', data: group2.ccs, currency: 'USD' },
           { title: 'US Stocks', data: group2.us, currency: 'USD' },
-          { title: 'AUS Holdings', data: group2.aus, currency: 'AUD' },
+          { title: 'AUS Holdings', data: group2.aus, currency: 'USD' },
         ]
           .filter(g => g.data && g.data.length > 0)
           .map(({ title, data, currency }) => (
@@ -797,6 +853,64 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
             </div>
           ))}
       </section>
+
+      {/* Options Holdings Summary — by ticker (no split by Call/Put or strike) */}
+      {optionSummary.length > 0 && (
+        <section className="mb-12">
+          <div className="mb-4">
+            <h2 className="text-xl font-black text-slate-800 uppercase flex items-center gap-2">
+              <Archive className="w-5 h-5 text-orange-500" /> Options Holdings (by Ticker)
+            </h2>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-3 border-b border-slate-100 bg-orange-50/30 flex items-center justify-between">
+              <h3 className="font-black text-slate-800 text-xs uppercase tracking-tight flex items-center gap-2">
+                <Archive size={14} className="text-orange-500" /> Options Summary
+              </h3>
+              <span className="text-[9px] font-black bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">{optionSummary.length} TICKERS</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[11px]">
+                <thead className="bg-slate-100/80">
+                  <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                    <th className="py-2 px-3">Stock</th>
+                    <th className="py-2 px-3">Name</th>
+                    <th className="py-2 px-3">Mkt</th>
+                    <th className="py-2 px-3 text-right">Net Contracts</th>
+                    <th className="py-2 px-3 text-right">Cost Basis (USD)</th>
+                    <th className="py-2 px-3 text-right">MV (USD)</th>
+                    <th className="py-2 px-3 text-right">MV %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {optionSummary.map((o: any) => {
+                    const mvPct = totalPortfolioMv > 0 ? (o.lastMvUsd / totalPortfolioMv) * 100 : 0;
+                    return (
+                      <tr key={o.stock} className="hover:bg-slate-50">
+                        <td className="py-1.5 px-3 font-black text-orange-600">{o.stock}</td>
+                        <td className="py-1.5 px-3 text-slate-500 text-[10px] max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap" title={o.name}>{o.name}</td>
+                        <td className="py-1.5 px-3 text-[10px] text-slate-400">{o.market}</td>
+                        <td className={`py-1.5 px-3 text-right font-mono font-bold ${o.netContracts >= 0 ? 'text-slate-700' : 'text-emerald-500'}`}>{o.netContracts.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                        <td className="py-1.5 px-3 text-right font-mono">{o.totalCostUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className={`py-1.5 px-3 text-right font-mono font-bold ${o.lastMvUsd >= 0 ? 'text-slate-800' : 'text-emerald-500'}`}>${o.lastMvUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className="py-1.5 px-3 text-right font-mono text-slate-500">{mvPct.toFixed(2)}%</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-50 border-t-2 border-slate-300">
+                    <td className="py-2 px-3 font-black text-slate-700 text-[10px] uppercase" colSpan={5}>Total</td>
+                    <td className={`py-2 px-3 text-right font-mono font-black text-xs ${optionSummaryTotalMv >= 0 ? 'text-slate-800' : 'text-emerald-600'}`}>${optionSummaryTotalMv.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-xs text-slate-600">{totalPortfolioMv > 0 ? ((optionSummaryTotalMv / totalPortfolioMv) * 100).toFixed(2) : '0.00'}%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-500 italic">
+              MV is positive for net long positions and negative for net short positions. Cost basis is the signed sum of transaction cash flows in USD.
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Review Table — moved to top, shown inline */}
 

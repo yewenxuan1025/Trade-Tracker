@@ -24,6 +24,8 @@ interface TransactionTableProps {
   onAddOptionTransaction?: (txn: Partial<TransactionData>) => void;
   onEditOptionTransaction?: (id: string, txn: Partial<TransactionData>) => void;
   onDeleteOptionTransaction?: (id: string | string[]) => void;
+  onDuplicateOptionTransaction?: (id: string) => void;
+  onSplitOptionTransaction?: (originalId: string, split1: { shares: number; commission: number; total: number }, split2: { shares: number; commission: number; total: number }) => void;
 }
 
 const TransactionTable: React.FC<TransactionTableProps> = ({ 
@@ -43,7 +45,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
     onDuplicateTransaction,
     onAddOptionTransaction,
     onEditOptionTransaction,
-    onDeleteOptionTransaction
+    onDeleteOptionTransaction,
+    onDuplicateOptionTransaction,
+    onSplitOptionTransaction
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof TransactionData; direction: 'asc' | 'desc' } | null>(null);
@@ -82,6 +86,10 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitForm, setSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
+  // Option split state (mirrors stock split, but operates on optionTransactions)
+  const [isOptionSplitModalOpen, setIsOptionSplitModalOpen] = useState(false);
+  const [splittingOptionId, setSplittingOptionId] = useState<string | null>(null);
+  const [optionSplitForm, setOptionSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
 
   useEffect(() => {
       if (isSplitModalOpen && editingId) {
@@ -91,6 +99,15 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
           }
       }
   }, [isSplitModalOpen, editingId]);
+
+  useEffect(() => {
+      if (isOptionSplitModalOpen && splittingOptionId) {
+          const txn = optionTransactions.find(t => t.id === splittingOptionId);
+          if (txn) {
+              setOptionSplitForm({ split1Shares: txn.shares / 2 });
+          }
+      }
+  }, [isOptionSplitModalOpen, splittingOptionId]);
 
   const handleSplitSubmit = (e: React.FormEvent) => {
       e.preventDefault();
@@ -134,13 +151,58 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
       const s2LastMv = lastPrice * s2Shares;
 
       onSplitTransaction(
-          editingId, 
-          { shares: s1Shares, commission: s1Comm, total: s1Total, lastMv: s1LastMv }, 
+          editingId,
+          { shares: s1Shares, commission: s1Comm, total: s1Total, lastMv: s1LastMv },
           { shares: s2Shares, commission: s2Comm, total: s2Total, lastMv: s2LastMv }
       );
       setIsSplitModalOpen(false);
       setEditingId(null);
       setSelectedIds(new Set());
+  };
+
+  const handleOptionSplitSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!splittingOptionId || !onSplitOptionTransaction) return;
+      const original = optionTransactions.find(t => t.id === splittingOptionId);
+      if (!original) return;
+
+      const s1Shares = Number(optionSplitForm.split1Shares);
+      const s2Shares = original.shares - s1Shares;
+
+      if (s1Shares === 0 || s2Shares === 0) {
+          showToast("Split parts cannot be zero", 'error');
+          return;
+      }
+      if (original.shares === 0) {
+          showToast("Original contracts cannot be zero", 'error');
+          return;
+      }
+
+      const ratio = s1Shares / original.shares;
+      const s1Comm = original.commission * ratio;
+      const s2Comm = original.commission - s1Comm;
+
+      const action = (original.action || 'Buy').toLowerCase();
+      const price = original.price || 0;
+
+      // Recalculate totals — same convention as stock split: buy = negative cash flow, sell = positive
+      const calcTotal = (shares: number, comm: number) => {
+          return action.includes('buy')
+            ? -Math.abs(price * shares) - comm
+            : Math.abs(price * shares) - comm;
+      };
+
+      const s1Total = calcTotal(s1Shares, s1Comm);
+      const s2Total = calcTotal(s2Shares, s2Comm);
+
+      onSplitOptionTransaction(
+          splittingOptionId,
+          { shares: s1Shares, commission: s1Comm, total: s1Total },
+          { shares: s2Shares, commission: s2Comm, total: s2Total }
+      );
+      setIsOptionSplitModalOpen(false);
+      setSplittingOptionId(null);
+      setSelectedOptionIds(new Set());
   };
 
   useEffect(() => {
@@ -419,7 +481,13 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                   
                   {selectedOptionIds.size === 1 && (
                     <>
+                      {onDuplicateOptionTransaction && (
+                        <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; onDuplicateOptionTransaction(id); setSelectedOptionIds(new Set()); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Copy size={14} /><span>Duplicate</span></button>
+                      )}
                       <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setOptionSharesStr(String(txn.shares)); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
+                      {onSplitOptionTransaction && (
+                        <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; setSplittingOptionId(id); setIsOptionSplitModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Scissors size={14} /><span>Split</span></button>
+                      )}
                       <button onClick={() => handleBulkDelete(true)} className="p-1.5 bg-white border border-red-200 rounded-lg text-red-500 hover:bg-red-50 transition-colors shadow-sm"><Trash2 size={14}/></button>
                     </>
                   )}
@@ -605,6 +673,60 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
           </div>
         </div>
       )}
+      {/* --- OPTION SPLIT MODAL --- */}
+      {isOptionSplitModalOpen && splittingOptionId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+              <h3 className="font-extrabold text-slate-800 uppercase tracking-tight">Split Option Transaction</h3>
+              <button onClick={() => setIsOptionSplitModalOpen(false)} className="hover:bg-slate-200 p-1.5 rounded-full transition-colors"><X size={20}/></button>
+            </div>
+            <form onSubmit={handleOptionSplitSubmit} className="p-6 space-y-4">
+                {(() => {
+                   const original = optionTransactions.find(t => t.id === splittingOptionId);
+                   if (!original) return <div className="text-red-500">Option transaction not found</div>;
+
+                   const s1Shares = Number(optionSplitForm.split1Shares);
+                   const s2Shares = original.shares - s1Shares;
+                   const ratio = original.shares !== 0 ? s1Shares / original.shares : 0;
+                   const s1Comm = original.commission * ratio;
+                   const s2Comm = original.commission - s1Comm;
+
+                   return (
+                    <>
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-4 space-y-1">
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">{original.stock} {original.option} {original.strike} exp {original.expiration}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Original Contracts:</span><span className="font-mono font-bold">{original.shares}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Original Commission:</span><span className="font-mono font-bold">{original.commission.toFixed(2)}</span></div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Split 1 Contracts</label>
+                            <input required type="number" step="0.0001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm font-bold text-purple-600" value={optionSplitForm.split1Shares} onChange={e => setOptionSplitForm({ split1Shares: e.target.value === '' ? '' : parseFloat(e.target.value) })}/>
+                            <div className="mt-1 text-xs text-slate-400 flex justify-between">
+                                <span>Comm: {s1Comm.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Split 2 Contracts (Remaining)</label>
+                            <input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-500 font-mono" value={s2Shares.toFixed(4)}/>
+                            <div className="mt-1 text-xs text-slate-400 flex justify-between">
+                                <span>Comm: {s2Comm.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 border-t flex justify-end gap-3 mt-4">
+                            <button type="button" onClick={() => setIsOptionSplitModalOpen(false)} className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors font-bold text-xs">Cancel</button>
+                            <button type="submit" className="px-6 py-2 bg-orange-500 text-white rounded-lg font-bold shadow-lg shadow-orange-200 hover:bg-orange-600 transition-all text-xs">CONFIRM SPLIT</button>
+                        </div>
+                    </>
+                   );
+                })()}
+            </form>
+          </div>
+        </div>
+      )}
       {confirmState && (
         <ConfirmDialog
           message={confirmState.message}
@@ -616,4 +738,4 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   );
 };
 
-export default TransactionTable;
+export default TransactionTable;

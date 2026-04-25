@@ -55,7 +55,21 @@ const App: React.FC = () => {
 
   const [pnlData, setPnlData] = useState<PnLData[]>(() => {
     const saved = localStorage.getItem(PNL_DATA_KEY);
-    return saved ? (JSON.parse(saved) as PnLData[]).map(p => ({ ...p, stock: padHkTicker(p.stock, p.market) })) : [];
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as PnLData[];
+    // Migration: legacy option PnL records sometimes stored the pairing action ("Buy to Cover", "Close Position",
+    // "Assignment", "Expire") in the `name` field instead of `optionAction`. Move it back to optionAction so the
+    // dedicated Action column displays correctly and Name can be rebuilt from lookup later.
+    const ACTION_NAMES = new Set(['buy to cover', 'close position', 'assignment', 'expire']);
+    return parsed.map(p => {
+      const next = { ...p, stock: padHkTicker(p.stock, p.market) };
+      const isOption = !!p.option && (p.option === 'Call' || p.option === 'Put' || /call|put/i.test(p.option));
+      if (isOption && p.name && ACTION_NAMES.has(p.name.trim().toLowerCase())) {
+        next.optionAction = p.optionAction || p.name;
+        next.name = ''; // will be repopulated from lookup later
+      }
+      return next;
+    });
   });
 
   const [navData, setNavData] = useState<NavData[]>(() => {
@@ -99,9 +113,13 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Calculate Option Position Sum from Option Transactions
+  // Calculate Option Position MV from Option Transactions
+  // Sign convention: long positions (net buy) are POSITIVE MV; short positions (net sell) are NEGATIVE MV.
+  // Transaction "total" is signed as cash flow (buy = -|p*sh|-comm, sell = +|p*sh|-comm), so we negate
+  // to get the option asset/liability value. This also keeps total portfolio MV consistent because
+  // cashPosition already absorbs openOptionCost = sum(total) (see useEffect below).
   const optionPosition = useMemo(() => {
-      return optionTransactions.reduce((sum, t) => sum + (t.total || 0), 0);
+      return -optionTransactions.reduce((sum, t) => sum + (t.total || 0), 0);
   }, [optionTransactions]);
 
   const [activeTab, setActiveTab] = useState<'summary' | 'analytics' | 'lookup' | 'transactions' | 'pnl' | 'history' | 'nav'>('summary');
@@ -136,12 +154,44 @@ const App: React.FC = () => {
     });
   }, []);
 
+  // Enrich option transactions: always overwrite name from lookup when available so wrong/legacy
+  // names (e.g. action strings, symbol-encoded names) get replaced with the correct company name.
+  // This is intentionally more aggressive than stock enrichment because option imports often have
+  // non-company strings in the Name column.
+  const enrichOptionTransactions = useCallback((txns: TransactionData[], lookup: LookupSheetData | null): TransactionData[] => {
+    return txns.map(txn => {
+      const ticker = txn.stock?.toUpperCase() || '';
+      const lu = lookup?.stocks.find(s => s.ticker.toUpperCase() === ticker);
+      const lookupName = lu?.companyName;
+      return {
+        ...txn,
+        // Prefer lookup company name; fall back to existing name if no lookup match
+        name: lookupName || txn.name || ticker,
+        market: txn.market || lu?.market || '',
+      };
+    });
+  }, []);
+
   // Task 4: Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
   // Re-enrich transactions whenever lookupData changes (fills in name + lastPrice from lookup)
   useEffect(() => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
-  }, [lookupData, enrichTransactions]);
+    setOptionTransactions(prev => enrichOptionTransactions(prev, lookupData));
+    // Repair option PnL names too: if name is empty/missing or matches an action string, refill from lookup.
+    setPnlData(prev => prev.map(p => {
+      const isOption = !!p.option && /call|put/i.test(p.option);
+      if (!isOption) return p;
+      const lu = lookupData.stocks.find(s => s.ticker.toUpperCase() === (p.stock || '').toUpperCase());
+      if (!lu?.companyName) return p;
+      const ACTION_NAMES = new Set(['buy to cover', 'close position', 'assignment', 'expire']);
+      const nameIsAction = p.name && ACTION_NAMES.has(p.name.trim().toLowerCase());
+      if (!p.name || nameIsAction || p.name === p.stock) {
+        return { ...p, name: lu.companyName, ...(nameIsAction ? { optionAction: p.optionAction || p.name } : {}) };
+      }
+      return p;
+    }));
+  }, [lookupData, enrichTransactions, enrichOptionTransactions]);
 
   // #5: Auto-recalculate cash position whenever relevant data changes
   useEffect(() => {
@@ -188,7 +238,7 @@ const App: React.FC = () => {
       }
       setLookupData(result.lookup);
       setTransactions(enrichTransactions(result.transactions, result.lookup));
-      setOptionTransactions(result.optionTransactions);
+      setOptionTransactions(enrichOptionTransactions(result.optionTransactions, result.lookup));
       setPnlData(result.pnl);
       setNavData(result.navData);
       // Load benchmark if present in the uploaded file
@@ -323,8 +373,11 @@ const App: React.FC = () => {
           return [...prev, ...enriched];
       });
 
-      // 3. Append Option Transactions
-      setOptionTransactions(prev => [...prev, ...result.optionTransactions]);
+      // 3. Append Option Transactions (enrich names from lookup)
+      setOptionTransactions(prev => {
+          const enriched = enrichOptionTransactions(result.optionTransactions, result.lookup || lookupData);
+          return [...prev, ...enriched];
+      });
 
       // 4. Append PnL
       setPnlData(prev => [...prev, ...result.pnl]);
@@ -571,8 +624,11 @@ const App: React.FC = () => {
   }, []);
 
   const handleAddOptionTransaction = useCallback((txn: Partial<TransactionData>) => {
+    const ticker = (txn.stock || '').toUpperCase();
+    const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === ticker);
     const newTxn: TransactionData = {
-        id: generateId(), stock: txn.stock || '', name: txn.name || '', market: txn.market || '',
+        id: generateId(), stock: txn.stock || '', name: txn.name || lu?.companyName || txn.stock || '',
+        market: txn.market || lu?.market || '',
         action: txn.action || 'Buy', price: txn.price || 0, shares: txn.shares || 0,
         date: txn.date || new Date().toISOString().split('T')[0], commission: txn.commission || 0,
         total: txn.total || 0, source: txn.source || 'IB AUS', lastPrice: 0, lastMv: 0,
@@ -580,7 +636,7 @@ const App: React.FC = () => {
         exercise: txn.exercise || 'No'
     };
     setOptionTransactions(prev => [...prev, newTxn]);
-  }, []);
+  }, [lookupData]);
 
   const handleEditOptionTransaction = useCallback((id: string, updated: Partial<TransactionData>) => {
       setOptionTransactions(prev => prev.map(t => String(t.id) === String(id) ? { ...t, ...updated } : t));
@@ -590,6 +646,31 @@ const App: React.FC = () => {
       const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
       setOptionTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
+  }, []);
+
+  const handleDuplicateOptionTransaction = useCallback((id: string) => {
+      setOptionTransactions(prev => {
+          const original = prev.find(t => String(t.id) === String(id));
+          if (!original) return prev;
+          return [...prev, { ...original, id: generateId() }];
+      });
+  }, []);
+
+  const handleSplitOptionTransaction = useCallback((
+    originalId: string,
+    s1: { shares: number; commission: number; total: number },
+    s2: { shares: number; commission: number; total: number }
+  ) => {
+      setOptionTransactions(prev => {
+          const index = prev.findIndex(t => String(t.id) === String(originalId));
+          if (index === -1) return prev;
+          const original = prev[index];
+          const t1 = { ...original, ...s1, id: generateId() + '_1' };
+          const t2 = { ...original, ...s2, id: generateId() + '_2' };
+          const newTxns = [...prev];
+          newTxns.splice(index, 1, t1, t2);
+          return newTxns;
+      });
   }, []);
 
   const handleEditPnL = useCallback((id: string, updated: Partial<PnLData>) => {
@@ -609,7 +690,7 @@ const App: React.FC = () => {
         else if (section === 'transaction') {
             setTransactions(enrichTransactions(result.transactions, lookupData));
         }
-        else if (section === 'option_transaction') setOptionTransactions(result.optionTransactions);
+        else if (section === 'option_transaction') setOptionTransactions(enrichOptionTransactions(result.optionTransactions, lookupData));
         else if (section === 'pnl') setPnlData(result.pnl);
         else if (section === 'nav') { if (result.navData.length > 0) setNavData(result.navData); }
     } catch (e) { showToast("Error uploading " + section + ": " + (e as Error).message, 'error'); }
@@ -677,6 +758,7 @@ const App: React.FC = () => {
               <SummaryDashboard
                 pnlData={pnlData}
                 transactions={transactions}
+                optionTransactions={optionTransactions}
                 lookupData={lookupData}
                 marketConstants={marketConstants}
                 cashPosition={effectiveCash}
@@ -705,7 +787,7 @@ const App: React.FC = () => {
                 onIncomeUpload={handleIncomeUpload}
               />
             )}
-            {activeTab === 'lookup' && (
+               {activeTab === 'lookup' && (
               <StockTable
                 stocks={lookupData?.stocks || []}
                 onStockAdd={(s) => { if(lookupData) setLookupData({...lookupData, stocks: [...lookupData.stocks, s]}); }}
@@ -745,6 +827,8 @@ const App: React.FC = () => {
                 onAddOptionTransaction={handleAddOptionTransaction}
                 onEditOptionTransaction={handleEditOptionTransaction}
                 onDeleteOptionTransaction={handleDeleteOptionTransaction}
+                onDuplicateOptionTransaction={handleDuplicateOptionTransaction}
+                onSplitOptionTransaction={handleSplitOptionTransaction}
               />
             )}
             {activeTab === 'pnl' && (
