@@ -14,6 +14,28 @@ import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis } from './services/excelService';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
+// Action strings that legacy data stored in PnLData.name instead of PnLData.optionAction.
+// We aggressively detect and move them whether or not the lookup table has a match,
+// so the dedicated Action column always reflects the closing action.
+const OPTION_ACTION_NAMES = new Set(['buy to cover', 'close position', 'assignment', 'expire']);
+
+const repairOptionPnlRecord = (p: PnLData, lookup: LookupSheetData | null): PnLData => {
+  const isOption = !!p.option && /call|put/i.test(p.option);
+  if (!isOption) return p;
+  const lu = lookup?.stocks.find(s => s.ticker.toUpperCase() === (p.stock || '').toUpperCase());
+  const nameIsAction = !!p.name && OPTION_ACTION_NAMES.has(p.name.trim().toLowerCase());
+  let next = p;
+  if (nameIsAction) {
+    next = { ...next, optionAction: p.optionAction || p.name, name: lu?.companyName || '' };
+  } else if ((!p.name || p.name === p.stock) && lu?.companyName) {
+    next = { ...next, name: lu.companyName };
+  } else if (lu?.companyName && p.name !== lu.companyName) {
+    // Refresh stale company names from current lookup
+    next = { ...next, name: lu.companyName };
+  }
+  return next;
+};
+
 const STORAGE_KEY = 'trade_tracker_market_constants';
 const LOOKUP_DATA_KEY = 'trade_tracker_lookup_data';
 const TRANSACTION_DATA_KEY = 'trade_tracker_txn_data';
@@ -178,19 +200,7 @@ const App: React.FC = () => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
     setOptionTransactions(prev => enrichOptionTransactions(prev, lookupData));
-    // Repair option PnL names too: if name is empty/missing or matches an action string, refill from lookup.
-    setPnlData(prev => prev.map(p => {
-      const isOption = !!p.option && /call|put/i.test(p.option);
-      if (!isOption) return p;
-      const lu = lookupData.stocks.find(s => s.ticker.toUpperCase() === (p.stock || '').toUpperCase());
-      if (!lu?.companyName) return p;
-      const ACTION_NAMES = new Set(['buy to cover', 'close position', 'assignment', 'expire']);
-      const nameIsAction = p.name && ACTION_NAMES.has(p.name.trim().toLowerCase());
-      if (!p.name || nameIsAction || p.name === p.stock) {
-        return { ...p, name: lu.companyName, ...(nameIsAction ? { optionAction: p.optionAction || p.name } : {}) };
-      }
-      return p;
-    }));
+    setPnlData(prev => prev.map(p => repairOptionPnlRecord(p, lookupData)));
   }, [lookupData, enrichTransactions, enrichOptionTransactions]);
 
   // #5: Auto-recalculate cash position whenever relevant data changes
@@ -204,20 +214,22 @@ const App: React.FC = () => {
       if (c === 'SGD') return amount / mc.sg_exg;
       return amount;
     };
-    const toUsdByMarket = (amount: number, market: string) => {
+    const toUsdByMarket = (amount: number, market: string, ticker?: string) => {
       const m = (market || '').toUpperCase().trim();
-      if (m === 'HK') return amount / mc.exg_rate;
-      if (m === 'AUS') return amount / mc.aud_exg;
-      if (m === 'SG') return amount / mc.sg_exg;
+      if (m === 'HK') return amount / (mc.exg_rate || 1);
+      if (m === 'AUS' || m === 'AUD' || m === 'AU' || m === 'AUSTRALIA') return amount / (mc.aud_exg || 1);
+      if (m === 'SG') return amount / (mc.sg_exg || 1);
+      // Defensive: AUS tickers often end in .AX
+      if (ticker && /\.AX$/i.test(ticker)) return amount / (mc.aud_exg || 1);
       return amount;
     };
     const EXCLUDED = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
     const netLedger = cashLedger.filter(e => !EXCLUDED.has((e.type || '').toLowerCase().replace(/[-\s]+/g, ''))).reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
-    const realizedPnl = pnlData.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || ''), 0);
+    const realizedPnl = pnlData.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || '', p.stock), 0);
     const dividends = dividendData.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
     const interest = interestData.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
-    const openStockCost = transactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
-    const openOptionCost = optionTransactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
+    const openStockCost = transactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market, t.stock), 0);
+    const openOptionCost = optionTransactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market, t.stock), 0);
     setCashPosition(parseFloat((netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost).toFixed(2)));
   }, [transactions, optionTransactions, pnlData, dividendData, interestData, cashLedger, marketConstants]);
 
@@ -577,8 +589,13 @@ const App: React.FC = () => {
     const openingCost = isLong ? Math.abs(buy.total) : Math.abs(sell.total);
     const returnPercent = openingCost !== 0 ? (realizedPnL / openingCost) * 100 : 0;
 
+    // Resolve company name: prefer current lookup, never accept an action string as the name.
+    const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
+    const buyNameIsAction = !!buy.name && OPTION_ACTION_NAMES.has(buy.name.trim().toLowerCase());
+    const resolvedName = lu?.companyName || (buyNameIsAction ? '' : buy.name) || '';
+
     const newPnl: PnLData = {
-        id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: buy.name, market: buy.market || 'US',
+        id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: resolvedName, market: buy.market || 'US',
         account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration, optionAction,
         quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission, totalBuy: buy.total,
         sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission, totalSell: sell.total,
@@ -589,7 +606,7 @@ const App: React.FC = () => {
     setPnlData(prev => [...prev, newPnl]);
     setOptionTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
     showToast("Option P&L record created successfully!", 'success');
-  }, [optionTransactions, pnlData]);
+  }, [optionTransactions, pnlData, lookupData]);
 
   const handleAddTransaction = useCallback((txn: Partial<TransactionData>) => {
     const ticker = (txn.stock || '').toUpperCase();
@@ -767,6 +784,11 @@ const App: React.FC = () => {
                 cashLedger={cashLedger}
                 onCashTransaction={handleCashTransaction}
                 onExport={handleGlobalExport}
+                onDeleteHolding={(ticker: string) => {
+                  const upper = (ticker || '').toUpperCase();
+                  if (!upper) return;
+                  setTransactions(prev => prev.filter(t => (t.stock || '').toUpperCase() !== upper));
+                }}
               />
             )}
             {activeTab === 'analytics' && (

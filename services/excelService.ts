@@ -10,6 +10,25 @@ export const generateId = () => {
 };
 
 /**
+ * Defensive market→FX-rate lookup. Accepts non-canonical market labels
+ * ("Australia", "AU", blanks) and falls back to the .AX ticker suffix
+ * so AUS holdings still convert to USD when the market field is mislabeled.
+ */
+const AUS_MARKETS_SET = new Set(['AUS', 'AUD', 'AU', 'AUSTRALIA']);
+export const getMarketRate = (market: string, ticker: string | undefined, mc: MarketConstants): number => {
+  const m = (market || '').toUpperCase().trim();
+  if (m === 'HK') return mc.exg_rate || 1;
+  if (m === 'SG') return mc.sg_exg || 1;
+  if (AUS_MARKETS_SET.has(m)) return mc.aud_exg || 1;
+  if (ticker && /\.AX$/i.test(ticker)) return mc.aud_exg || 1;
+  return 1;
+};
+export const isAusMarketTicker = (market: string, ticker: string | undefined): boolean => {
+  const m = (market || '').toUpperCase().trim();
+  return AUS_MARKETS_SET.has(m) || (!!ticker && /\.AX$/i.test(ticker));
+};
+
+/**
  * Helper to safely parse numeric values from Excel
  */
 const parseNumeric = (val: any, precision?: number): number => {
@@ -757,13 +776,7 @@ export const exportPnLToExcel = (pnlData: PnLData[], marketConstants?: MarketCon
     const workbook = XLSX.utils.book_new();
 
     const processPnl = (data: PnLData[]) => data.map(p => {
-        let rate = 1;
-        if (marketConstants) {
-            const m = (p.market || '').toUpperCase().trim();
-            if (m === 'HK') rate = marketConstants.exg_rate;
-            else if (m === 'SG') rate = marketConstants.sg_exg;
-            else if (m === 'AUD' || m === 'AUS') rate = marketConstants.aud_exg;
-        }
+        const rate = marketConstants ? getMarketRate(p.market || '', p.stock, marketConstants) : 1;
         return { ...p, realizedPnLUsd: p.realizedPnL / rate };
     });
 
@@ -810,19 +823,13 @@ export const calculatePortfolioAnalysis = (
     cashPosition: number,
     optionPosition: number = 0
 ) => {
-    const getRate = (market: string) => {
-      const m = (market || '').toUpperCase().trim();
-      if (m === 'HK') return marketConstants.exg_rate;
-      if (m === 'SG') return marketConstants.sg_exg;
-      if (m === 'AUD' || m === 'AUS') return marketConstants.aud_exg;
-      return 1;
-    };
+    const getRate = (market: string, ticker?: string) => getMarketRate(market, ticker, marketConstants);
 
     let totalPnlUsd = 0;
     const stockRealizedPnlLocalMap = new Map<string, number>();
 
     pnlData.forEach(p => {
-      const rate = getRate(p.market || '');
+      const rate = getRate(p.market || '', p.stock);
       totalPnlUsd += (p.realizedPnL / rate);
       const ticker = (p.stock || '').toUpperCase().trim();
       if (ticker) stockRealizedPnlLocalMap.set(ticker, (stockRealizedPnlLocalMap.get(ticker) || 0) + p.realizedPnL);
@@ -865,7 +872,7 @@ export const calculatePortfolioAnalysis = (
       if (data.shares <= 0.001) return;
       const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase().trim() === ticker);
       const market = (lookup?.market || data.market || 'US').toUpperCase().trim();
-      const rate = getRate(market);
+      const rate = getRate(market, ticker);
       const price = lookup?.closePrice || 0;
       
       const totalCostUsd = data.totalCostLocal / rate;
@@ -975,7 +982,7 @@ export const calculatePortfolioAnalysis = (
       const lookup = lookupData?.stocks.find(s => s.ticker.toUpperCase().trim() === ticker);
       const market = (lookup?.market || holding.market || 'US').toUpperCase().trim();
       const isHk = market === 'HK';
-      const rateToUsd = getRate(market);
+      const rateToUsd = getRate(market, ticker);
       const displayRate = isHk ? 1 : rateToUsd;
       
       const pos = holding.shares;
@@ -1090,12 +1097,7 @@ export const exportGlobalData = (
     // Helper to rate convert PnL for stats
     const processPnlForStats = (data: PnLData[]) => {
         data.forEach(p => {
-            let rate = 1;
-            const m = (p.market || '').toUpperCase().trim();
-            if (m === 'HK') rate = marketConstants.exg_rate;
-            else if (m === 'SG') rate = marketConstants.sg_exg;
-            else if (m === 'AUD' || m === 'AUS') rate = marketConstants.aud_exg;
-            
+            const rate = getMarketRate(p.market || '', p.stock, marketConstants);
             const pnlUsd = p.realizedPnL / rate;
             totalRealizedPnlUsd += pnlUsd;
 
@@ -1217,8 +1219,8 @@ export const exportGlobalData = (
     }
 
     if (holdingsUs.length > 0) {
-        const holdingsUsOnly = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS').map(({Market, ...rest}: any) => rest);
-        const holdingsAus = holdingsUs.filter((h: any) => (h.Market || '').toUpperCase() === 'AUS').map(({Market, ...rest}: any) => rest);
+        const holdingsUsOnly = holdingsUs.filter((h: any) => !isAusMarketTicker(h.Market || '', h.Stock)).map(({Market, ...rest}: any) => rest);
+        const holdingsAus = holdingsUs.filter((h: any) => isAusMarketTicker(h.Market || '', h.Stock)).map(({Market, ...rest}: any) => rest);
         if (holdingsUsOnly.length > 0) {
             const ws = XLSX.utils.json_to_sheet(holdingsUsOnly);
             formatWorksheet(ws, holdingsUsOnly);
@@ -1287,11 +1289,7 @@ export const exportGlobalData = (
 
     // Helper to rate convert PnL for export
     const processPnl = (data: PnLData[]) => data.map(p => {
-        let rate = 1;
-        const m = (p.market || '').toUpperCase().trim();
-        if (m === 'HK') rate = marketConstants.exg_rate;
-        else if (m === 'SG') rate = marketConstants.sg_exg;
-        else if (m === 'AUD' || m === 'AUS') rate = marketConstants.aud_exg;
+        const rate = getMarketRate(p.market || '', p.stock, marketConstants);
         return { ...p, realizedPnLUsd: p.realizedPnL / rate };
     });
 

@@ -1,7 +1,26 @@
 
 import React, { useMemo, useState } from 'react';
 import { PnLData, MarketConstants, TransactionData, LookupSheetData, CashLedgerEntry, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
-import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, ArrowDownCircle, ArrowUpCircle, Download } from 'lucide-react';
+import { BarChart3, Table as TableIcon, Calculator, Filter, Archive, Plus, ArrowDownCircle, ArrowUpCircle, Download, Trash2 } from 'lucide-react';
+
+// Robust market→FX-rate lookup. Defensive against non-canonical market strings
+// (e.g. "Australia", "AU", blanks) and falls back to ticker-suffix detection
+// for AUS tickers so values still convert to USD even when the market field
+// is mislabeled in the source data.
+const AUS_MARKETS = new Set(['AUS', 'AUD', 'AU', 'AUSTRALIA']);
+const isAusTicker = (ticker: string) => /\.AX$/i.test(ticker || '');
+const getRate = (market: string, ticker: string, mc: MarketConstants): number => {
+  const m = (market || '').toUpperCase().trim();
+  if (m === 'HK') return mc.exg_rate || 1;
+  if (m === 'SG') return mc.sg_exg || 1;
+  if (AUS_MARKETS.has(m)) return mc.aud_exg || 1;
+  if (isAusTicker(ticker)) return mc.aud_exg || 1;
+  return 1;
+};
+const isAusMarket = (market: string, ticker: string): boolean => {
+  const m = (market || '').toUpperCase().trim();
+  return AUS_MARKETS.has(m) || isAusTicker(ticker);
+};
 
 
 interface SummaryDashboardProps {
@@ -16,9 +35,10 @@ interface SummaryDashboardProps {
   cashLedger?: CashLedgerEntry[];
   onCashTransaction?: (entry: Omit<CashLedgerEntry, 'id'>) => void;
   onExport?: () => void;
+  onDeleteHolding?: (ticker: string) => void;
 }
 
-const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, optionTransactions = [], lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction, onExport }) => {
+const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactions, optionTransactions = [], lookupData, marketConstants, cashPosition, onUpdateCash, optionPosition, cashLedger = [], onCashTransaction, onExport, onDeleteHolding }) => {
 
   // Cash deposit/withdrawal modal state
   const [showCashModal, setShowCashModal] = useState(false);
@@ -127,11 +147,8 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
         const priceLocal = lookup?.closePrice || 0;
         const market = (data.market || 'US').toUpperCase();
         
-        // Exchange Rate Logic
-        let rate = 1;
-        if (market === 'HK') rate = marketConstants.exg_rate;
-        else if (market === 'SG') rate = marketConstants.sg_exg;
-        else if (['AUD', 'AUS'].includes(market)) rate = marketConstants.aud_exg;
+        // Exchange Rate Logic — uses defensive getRate (market + ticker fallback)
+        const rate = getRate(market, stock, marketConstants);
 
         // Calculate USD values for Aggregation and P&L (Consistent for all markets)
         const totalCostUsd = data.totalCostLocal / rate;
@@ -194,12 +211,12 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     });
 
     const ccsHoldings = g2Final.filter(d => d.isCCS && d.market !== 'HK');
-    
-    // AUS/AUD Holdings
-    const ausHoldings = g2Final.filter(d => ['AUD', 'AUS'].includes(d.market));
+
+    // AUS/AUD Holdings — broadened detection (matches getRate / isAusMarket)
+    const ausHoldings = g2Final.filter(d => isAusMarket(d.market, d.stock));
 
     // US & SG Holdings (remainder of non-CCS, non-HK, non-AUS)
-    const usHoldings = g2Final.filter(d => !d.isCCS && !['HK', 'AUD', 'AUS'].includes(d.market));
+    const usHoldings = g2Final.filter(d => !d.isCCS && d.market !== 'HK' && !isAusMarket(d.market, d.stock));
 
     // Calculate Summary Totals
     const holdingsSummary = {
@@ -246,12 +263,24 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     };
   }, [pnlData, transactions, lookupData, marketConstants, cashPosition, optionPosition]);
 
-  // Option summary by ticker (consistent with stock holdings — group by ticker, not by Call/Put or strike)
+  // Option summary by ticker (consistent with stock holdings — group by ticker, not by Call/Put or strike).
+  // Cash flow is derived from canonical fields (action + price + shares + commission) rather than t.total,
+  // so MV sign stays correct even when imports/manual entries store unsigned magnitudes.
   const optionSummary = useMemo(() => {
     if (!optionTransactions || optionTransactions.length === 0) return [] as any[];
 
-    type Agg = { stock: string; name: string; market: string; netContracts: number; totalCashFlowLocal: number };
+    type Agg = {
+      stock: string; name: string; market: string;
+      longContracts: number; shortContracts: number;
+      premiumPaidLocal: number;     // gross outflow on buy legs (positive number, local ccy)
+      premiumReceivedLocal: number; // gross inflow on sell legs (positive number, local ccy)
+      totalCashFlowLocal: number;   // signed: buy negative, sell positive
+      strikeWeighted: number;       // Σ(strike × contracts)
+      strikeWeightDenom: number;    // Σ(contracts)
+      nextExp: string | null;       // earliest non-expired expiration date (ISO)
+    };
     const byTicker = new Map<string, Agg>();
+    const todayIso = new Date().toISOString().slice(0, 10);
 
     optionTransactions.forEach(t => {
       const stock = (t.stock || '').toUpperCase().trim();
@@ -260,36 +289,75 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       const market = (t.market || lu?.market || 'US').toUpperCase();
       const name = lu?.companyName || t.name || stock;
       const action = (t.action || '').toLowerCase();
+      const isBuy = action.includes('buy');
       const shares = Math.abs(t.shares || 0);
-      const signedContracts = action.includes('buy') ? shares : -shares;
+      const grossLocal = Math.abs((t.price || 0) * shares);
+      const commLocal = Math.abs(t.commission || 0);
+      const signedCashFlowLocal = isBuy ? -(grossLocal + commLocal) : (grossLocal - commLocal);
 
-      const cur = byTicker.get(stock) || { stock, name, market, netContracts: 0, totalCashFlowLocal: 0 };
-      cur.name = name; // refresh from lookup if available
+      const cur = byTicker.get(stock) || {
+        stock, name, market,
+        longContracts: 0, shortContracts: 0,
+        premiumPaidLocal: 0, premiumReceivedLocal: 0, totalCashFlowLocal: 0,
+        strikeWeighted: 0, strikeWeightDenom: 0,
+        nextExp: null as string | null,
+      };
+      cur.name = name;
       cur.market = market;
-      cur.netContracts += signedContracts;
-      cur.totalCashFlowLocal += (t.total || 0);
+      if (isBuy) {
+        cur.longContracts += shares;
+        cur.premiumPaidLocal += grossLocal + commLocal;
+      } else {
+        cur.shortContracts += shares;
+        cur.premiumReceivedLocal += grossLocal - commLocal;
+      }
+      cur.totalCashFlowLocal += signedCashFlowLocal;
+      if (t.strike && shares > 0) {
+        cur.strikeWeighted += (t.strike || 0) * shares;
+        cur.strikeWeightDenom += shares;
+      }
+      const exp = (t.expiration || '').toString().replace(/\//g, '-').slice(0, 10);
+      if (exp && exp >= todayIso) {
+        if (!cur.nextExp || exp < cur.nextExp) cur.nextExp = exp;
+      }
       byTicker.set(stock, cur);
     });
 
-    const rate = (mkt: string) => {
-      const m = mkt.toUpperCase();
-      if (m === 'HK') return marketConstants.exg_rate;
-      if (m === 'SG') return marketConstants.sg_exg;
-      if (m === 'AUD' || m === 'AUS') return marketConstants.aud_exg;
-      return 1;
-    };
+    // Realized option P&L per ticker (USD), summed from pnlData filtered to options only
+    const realizedByTicker = new Map<string, number>();
+    pnlData.forEach(p => {
+      const isOption = !!p.option && /call|put/i.test(p.option);
+      if (!isOption) return;
+      const stock = (p.stock || '').toUpperCase().trim();
+      if (!stock) return;
+      const r = getRate(p.market || '', stock, marketConstants) || 1;
+      const usd = (p.realizedPnL || 0) / r;
+      realizedByTicker.set(stock, (realizedByTicker.get(stock) || 0) + usd);
+    });
 
     const rows = Array.from(byTicker.values()).map(a => {
-      const r = rate(a.market) || 1;
+      const r = getRate(a.market, a.stock, marketConstants) || 1;
+      const netContracts = a.longContracts - a.shortContracts;
       const totalCostUsd = a.totalCashFlowLocal / r;       // signed cash flow in USD (buy = negative)
-      const lastMvUsd = -a.totalCashFlowLocal / r;          // long (net buy) → positive MV; short (net sell) → negative MV
+      const lastMvUsd = -a.totalCashFlowLocal / r;          // long → positive MV; short → negative MV
+      const premiumPaidUsd = a.premiumPaidLocal / r;
+      const premiumReceivedUsd = a.premiumReceivedLocal / r;
+      const avgStrike = a.strikeWeightDenom > 0 ? a.strikeWeighted / a.strikeWeightDenom : 0;
+      const realizedPnlUsd = realizedByTicker.get(a.stock) || 0;
       return {
         stock: a.stock,
         name: a.name,
         market: a.market,
-        netContracts: a.netContracts,
+        longContracts: a.longContracts,
+        shortContracts: a.shortContracts,
+        netContracts,
         totalCostUsd,
         lastMvUsd,
+        premiumPaidUsd,
+        premiumReceivedUsd,
+        avgStrike,
+        nextExp: a.nextExp,
+        realizedPnlUsd,
       };
     });
 
@@ -297,9 +365,22 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
     const open = rows.filter(r => Math.abs(r.netContracts) > 0.0001 || Math.abs(r.totalCostUsd) > 0.005);
     open.sort((a, b) => a.stock.localeCompare(b.stock));
     return open;
-  }, [optionTransactions, lookupData, marketConstants]);
+  }, [optionTransactions, lookupData, marketConstants, pnlData]);
 
   const optionSummaryTotalMv = useMemo(() => optionSummary.reduce((s, r) => s + r.lastMvUsd, 0), [optionSummary]);
+
+  // Aggregate stats for "Options At a Glance" card
+  const optionAggregate = useMemo(() => {
+    const tickers = optionSummary.length;
+    const longContracts = optionSummary.reduce((s, r) => s + (r.longContracts || 0), 0);
+    const shortContracts = optionSummary.reduce((s, r) => s + (r.shortContracts || 0), 0);
+    const premiumPaid = optionSummary.reduce((s, r) => s + (r.premiumPaidUsd || 0), 0);
+    const premiumReceived = optionSummary.reduce((s, r) => s + (r.premiumReceivedUsd || 0), 0);
+    const netCostBasis = optionSummary.reduce((s, r) => s + (r.totalCostUsd || 0), 0);
+    const openMv = optionSummary.reduce((s, r) => s + (r.lastMvUsd || 0), 0);
+    const realizedPnl = optionSummary.reduce((s, r) => s + (r.realizedPnlUsd || 0), 0);
+    return { tickers, longContracts, shortContracts, premiumPaid, premiumReceived, netCostBasis, openMv, realizedPnl };
+  }, [optionSummary]);
 
   // Second Memo: Filtering and Weighted Average Calculation
   const { filteredHoldings, weightedAvgs } = useMemo(() => {
@@ -822,6 +903,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                       <th className="py-2 px-3 text-right">MV %</th>
                       <th className="py-2 px-3 text-right">Held Since</th>
                       <th className="py-2 px-3 text-right">Days</th>
+                      {onDeleteHolding && <th className="py-2 px-3 text-center w-10"></th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -844,6 +926,21 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                           <td className="py-1.5 px-3 text-right font-mono text-slate-500">{h.mvPct?.toFixed(2)}%</td>
                           <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{heldSince}</td>
                           <td className="py-1.5 px-3 text-right font-mono text-slate-400 text-[10px]">{daysSince(heldSince)}</td>
+                          {onDeleteHolding && (
+                            <td className="py-1.5 px-3 text-center">
+                              <button
+                                title={`Delete all transactions for ${h.stock}`}
+                                onClick={() => {
+                                  if (window.confirm(`Delete all transactions for ${h.stock} (${h.name})?\n\nThis will remove the holding and cannot be undone. Realized P&L records are kept.`)) {
+                                    onDeleteHolding(h.stock);
+                                  }
+                                }}
+                                className="p-1 rounded text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -862,6 +959,49 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               <Archive className="w-5 h-5 text-orange-500" /> Options Holdings (by Ticker)
             </h2>
           </div>
+
+          {/* Options At a Glance — aggregate stats card */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Calculator className="w-4 h-4 text-orange-500" />
+              <h3 className="font-black text-slate-800 text-xs uppercase tracking-tight">Options At a Glance</h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Tickers</span>
+                <span className="font-mono font-bold text-sm text-slate-700">{optionAggregate.tickers}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Long Contracts</span>
+                <span className="font-mono font-bold text-sm text-slate-700">{optionAggregate.longContracts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Short Contracts</span>
+                <span className="font-mono font-bold text-sm text-emerald-600">{optionAggregate.shortContracts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Premium Paid</span>
+                <span className="font-mono font-bold text-sm text-slate-700">${optionAggregate.premiumPaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Premium Received</span>
+                <span className="font-mono font-bold text-sm text-slate-700">${optionAggregate.premiumReceived.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Net Cost Basis</span>
+                <span className={`font-mono font-bold text-sm ${optionAggregate.netCostBasis >= 0 ? 'text-slate-700' : 'text-emerald-600'}`}>${optionAggregate.netCostBasis.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Open MV</span>
+                <span className={`font-mono font-bold text-sm ${optionAggregate.openMv >= 0 ? 'text-slate-800' : 'text-emerald-600'}`}>${optionAggregate.openMv.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Realized P&amp;L</span>
+                <span className={`font-mono font-bold text-sm ${optionAggregate.realizedPnl >= 0 ? 'text-red-500' : 'text-emerald-600'}`}>${optionAggregate.realizedPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="p-3 border-b border-slate-100 bg-orange-50/30 flex items-center justify-between">
               <h3 className="font-black text-slate-800 text-xs uppercase tracking-tight flex items-center gap-2">
@@ -876,10 +1016,15 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                     <th className="py-2 px-3">Stock</th>
                     <th className="py-2 px-3">Name</th>
                     <th className="py-2 px-3">Mkt</th>
-                    <th className="py-2 px-3 text-right">Net Contracts</th>
+                    <th className="py-2 px-3 text-right">Long</th>
+                    <th className="py-2 px-3 text-right">Short</th>
+                    <th className="py-2 px-3 text-right">Net</th>
+                    <th className="py-2 px-3 text-right">Avg Strike</th>
+                    <th className="py-2 px-3 text-right">Next Exp</th>
                     <th className="py-2 px-3 text-right">Cost Basis (USD)</th>
                     <th className="py-2 px-3 text-right">MV (USD)</th>
                     <th className="py-2 px-3 text-right">MV %</th>
+                    <th className="py-2 px-3 text-right">Realized P&amp;L (USD)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -890,23 +1035,35 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
                         <td className="py-1.5 px-3 font-black text-orange-600">{o.stock}</td>
                         <td className="py-1.5 px-3 text-slate-500 text-[10px] max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap" title={o.name}>{o.name}</td>
                         <td className="py-1.5 px-3 text-[10px] text-slate-400">{o.market}</td>
-                        <td className={`py-1.5 px-3 text-right font-mono font-bold ${o.netContracts >= 0 ? 'text-slate-700' : 'text-emerald-500'}`}>{o.netContracts.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                        <td className="py-1.5 px-3 text-right font-mono text-slate-700">{o.longContracts ? o.longContracts.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '-'}</td>
+                        <td className="py-1.5 px-3 text-right font-mono text-emerald-600">{o.shortContracts ? o.shortContracts.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '-'}</td>
+                        <td className={`py-1.5 px-3 text-right font-mono font-bold ${o.netContracts >= 0 ? 'text-slate-700' : 'text-emerald-500'}`}>{o.netContracts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className="py-1.5 px-3 text-right font-mono text-slate-500">{o.avgStrike ? o.avgStrike.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '-'}</td>
+                        <td className="py-1.5 px-3 text-right font-mono text-[10px] text-slate-500">{o.nextExp || '-'}</td>
                         <td className="py-1.5 px-3 text-right font-mono">{o.totalCostUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                         <td className={`py-1.5 px-3 text-right font-mono font-bold ${o.lastMvUsd >= 0 ? 'text-slate-800' : 'text-emerald-500'}`}>${o.lastMvUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                         <td className="py-1.5 px-3 text-right font-mono text-slate-500">{mvPct.toFixed(2)}%</td>
+                        <td className={`py-1.5 px-3 text-right font-mono font-bold ${(o.realizedPnlUsd || 0) >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>{o.realizedPnlUsd ? o.realizedPnlUsd.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '-'}</td>
                       </tr>
                     );
                   })}
                   <tr className="bg-slate-50 border-t-2 border-slate-300">
-                    <td className="py-2 px-3 font-black text-slate-700 text-[10px] uppercase" colSpan={5}>Total</td>
+                    <td className="py-2 px-3 font-black text-slate-700 text-[10px] uppercase" colSpan={3}>Total</td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-xs text-slate-700">{optionAggregate.longContracts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-xs text-emerald-600">{optionAggregate.shortContracts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-xs text-slate-700">{(optionAggregate.longContracts - optionAggregate.shortContracts).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                    <td className="py-2 px-3"></td>
+                    <td className="py-2 px-3"></td>
+                    <td className={`py-2 px-3 text-right font-mono font-black text-xs ${optionAggregate.netCostBasis >= 0 ? 'text-slate-700' : 'text-emerald-600'}`}>{optionAggregate.netCostBasis.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                     <td className={`py-2 px-3 text-right font-mono font-black text-xs ${optionSummaryTotalMv >= 0 ? 'text-slate-800' : 'text-emerald-600'}`}>${optionSummaryTotalMv.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                     <td className="py-2 px-3 text-right font-mono font-black text-xs text-slate-600">{totalPortfolioMv > 0 ? ((optionSummaryTotalMv / totalPortfolioMv) * 100).toFixed(2) : '0.00'}%</td>
+                    <td className={`py-2 px-3 text-right font-mono font-black text-xs ${optionAggregate.realizedPnl >= 0 ? 'text-red-500' : 'text-emerald-600'}`}>{optionAggregate.realizedPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
             <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-500 italic">
-              MV is positive for net long positions and negative for net short positions. Cost basis is the signed sum of transaction cash flows in USD.
+              MV is positive for net long positions and negative for net short positions. Cost basis is the signed sum of transaction cash flows in USD. Avg Strike is weighted by contract count.
             </div>
           </div>
         </section>

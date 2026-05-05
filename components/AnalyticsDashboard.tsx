@@ -33,11 +33,17 @@ interface AnalyticsDashboardProps {
 
 const CHART_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#84cc16', '#f97316'];
 
-const getRate = (market: string, mc: MarketConstants) => {
+const AUS_MARKETS_ANALYTICS = new Set(['AUS', 'AUD', 'AU', 'AUSTRALIA']);
+const isAusHolding = (market: string, ticker?: string) => {
   const m = (market || '').toUpperCase().trim();
-  if (m === 'HK') return mc.exg_rate;
-  if (m === 'SG') return mc.sg_exg;
-  if (m === 'AUS' || m === 'AUD') return mc.aud_exg;
+  return AUS_MARKETS_ANALYTICS.has(m) || (!!ticker && /\.AX$/i.test(ticker));
+};
+const getRate = (market: string, mc: MarketConstants, ticker?: string) => {
+  const m = (market || '').toUpperCase().trim();
+  if (m === 'HK') return mc.exg_rate || 1;
+  if (m === 'SG') return mc.sg_exg || 1;
+  if (AUS_MARKETS_ANALYTICS.has(m)) return mc.aud_exg || 1;
+  if (ticker && /\.AX$/i.test(ticker)) return mc.aud_exg || 1;
   return 1;
 };
 
@@ -162,7 +168,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const pnlMetrics = useMemo(() => {
     const wins: number[] = [], losses: number[] = [];
     filtered.forEach(p => {
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       if (usd >= 0) wins.push(usd); else losses.push(usd);
     });
@@ -203,7 +209,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let cum = 0, peak = 0;
     return sorted.map(p => {
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       cum += usd;
       peak = Math.max(peak, cum);
@@ -223,7 +229,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     filtered.forEach(p => {
       if (!p.sellDate) return;
       const key = getFrequencyKey(p.sellDate, heatFreq);
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const cur = map.get(key) || { total: 0, count: 0 };
       map.set(key, { total: cur.total + usd, count: cur.count + 1 });
@@ -280,7 +286,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       byCategory = new Map<string, number>(),
       byClass = new Map<string, number>();
     filtered.forEach(p => {
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const info = stockMap.get(p.stock.toUpperCase()) || { type: 'Other', category: 'Other', class: 'Other' };
       byType.set(info.type, (byType.get(info.type) || 0) + usd);
@@ -300,7 +306,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       .sort((a, b) => new Date(a.sellDate).getTime() - new Date(b.sellDate).getTime());
     let curStreak = 0, maxWin = 0, maxLoss = 0;
     const data = sorted.map(p => {
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const isWin = usd >= 0;
       if (isWin) {
@@ -359,7 +365,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const stats = new Map<string, { count: number; wins: number; totalPnl: number }>();
     filtered.forEach(p => {
       const key = p.stock.toUpperCase();
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const cur = stats.get(key) || { count: 0, wins: 0, totalPnl: 0 };
       cur.count++;
@@ -388,7 +394,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const total = filtered.length;
     if (total === 0)
       return { winRate: 0, lossRate: 0, avgWin: 0, avgLoss: 0, expectancy: 0, kelly: 0, halfKelly: 0 };
-    const getUsd = (p: PnLData) => p.realizedPnL / getRate(p.market || '', marketConstants);
+    const getUsd = (p: PnLData) => p.realizedPnL / getRate(p.market || '', marketConstants, p.stock);
     const avgWin = wins.length ? wins.map(getUsd).reduce((a, b) => a + b, 0) / wins.length : 0;
     const avgLoss = losses.length ? Math.abs(losses.map(getUsd).reduce((a, b) => a + b, 0) / losses.length) : 0;
     const winRate = wins.length / total;
@@ -402,7 +408,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const topWinnersLosers = useMemo(() => {
     const byStock = new Map<string, { stock: string; pnl: number }>();
     filtered.forEach(p => {
-      const rate = getRate(p.market || '', marketConstants);
+      const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const cur = byStock.get(p.stock) || { stock: p.stock, pnl: 0 };
       cur.pnl += usd;
@@ -448,8 +454,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return {
       hk: toBar(portfolioAnalysis.g2Hk || []),
       ccs: toBar(portfolioAnalysis.g2Ccs || []),
-      us: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() !== 'AUS')),
-      aus: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => (h.Market || '').toUpperCase() === 'AUS')),
+      us: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => !isAusHolding(h.Market || '', h.Stock))),
+      aus: toBar((portfolioAnalysis.g2Us || []).filter((h: any) => isAusHolding(h.Market || '', h.Stock))),
     };
   }, [portfolioAnalysis]);
 
