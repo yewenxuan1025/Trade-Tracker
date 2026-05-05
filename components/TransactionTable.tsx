@@ -83,6 +83,14 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const [optionSharesStr, setOptionSharesStr] = useState('0');
 
   const { showToast } = useToast();
+
+  // Render-time name resolver: prefer current lookup, fall back to stored name, then ticker.
+  // Decouples display from the persisted name field so stale/wrong names get fixed automatically.
+  const resolveName = (t: TransactionData): string => {
+    const ticker = (t.stock || '').toUpperCase();
+    const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === ticker);
+    return lu?.companyName || t.name || t.stock || '';
+  };
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitForm, setSplitForm] = useState<{ split1Shares: string | number }>({ split1Shares: 0 });
@@ -413,6 +421,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                   {selectedIds.size === 2 && (
                     <button onClick={() => onCreatePnL(Array.from(selectedIds))} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium shadow-sm hover:bg-indigo-700 transition-colors uppercase tracking-wider">Pair & P&L</button>
                   )}
+                  {selectedIds.size >= 1 && (
+                    <button onClick={() => handleBulkDelete(false)} title={`Delete ${selectedIds.size} selected`} className="p-1.5 bg-white border border-red-200 rounded-lg text-red-500 hover:bg-red-50 transition-colors shadow-sm"><Trash2 size={14}/></button>
+                  )}
                   <button onClick={onExport} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-colors"><Download size={14} /><span>Export</span></button>
                 </div>
               </div>
@@ -446,7 +457,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                     <td className={`px-4 py-2 sticky left-0 z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(t.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedIds(n); }}/></td>
                     <td className={`px-4 py-2 text-[10px] text-slate-400 sticky left-10 z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{i + 1}</td>
                     <td className={`px-4 py-2 font-bold text-blue-600 truncate sticky left-[88px] z-10 border-r ${selectedIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{t.stock}</td>
-                    <td className="px-4 py-2 text-slate-600 truncate text-xs">{t.name}</td>
+                    <td className="px-4 py-2 text-slate-600 truncate text-xs" title={resolveName(t)}>{resolveName(t)}</td>
                     <td className="px-4 py-2 text-[10px] text-slate-400">{t.market}</td>
                     <td className={`px-4 py-2 text-[10px] font-bold uppercase ${t.action.toLowerCase().includes('buy') ? 'text-red-500' : 'text-emerald-500'}`}>{t.action}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs">{safeFixed(t.price)}</td>
@@ -533,7 +544,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                     <td className={`px-4 py-2 sticky left-0 z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedOptionIds.has(t.id)} onChange={() => { const n = new Set(selectedOptionIds); if(n.has(t.id)) n.delete(t.id); else n.add(t.id); setSelectedOptionIds(n); }}/></td>
                     <td className={`px-4 py-2 text-[10px] text-slate-400 sticky left-10 z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{i + 1}</td>
                     <td className={`px-4 py-2 font-bold text-purple-600 truncate sticky left-[88px] z-10 border-r ${selectedOptionIds.has(t.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{t.stock}</td>
-                    <td className="px-4 py-2 text-slate-600 truncate text-xs">{t.name}</td>
+                    <td className="px-4 py-2 text-slate-600 truncate text-xs" title={resolveName(t)}>{resolveName(t)}</td>
                     <td className="px-4 py-2 text-xs font-bold text-slate-700">{t.option}</td>
                     <td className="px-4 py-2 text-[10px] text-slate-500">{t.expiration}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs">{t.strike}</td>
