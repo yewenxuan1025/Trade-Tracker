@@ -63,7 +63,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
   const [colWidths, setColWidths] = useState<Record<string, number>>({ 
     tradeNumber: 50, stock: 95, name: 160, market: 65, account: 90, quantity: 85, buyDate: 100, sellDate: 100, holdingDays: 65, 
     buyPrice: 90, buyComm: 90, sellPrice: 90, sellComm: 90, totalBuy: 115, totalSell: 115, realizedPnL: 110, returnPercent: 95,
-    tgtProfitCost: 110, tgtProfitSales: 110, tgtLossCost: 110, tgtLossSales: 110, option: 80, strike: 80, expiration: 100
+    tgtProfitCost: 110, tgtProfitSales: 110, tgtLossCost: 110, tgtLossSales: 110, option: 80, strike: 80, expiration: 100, optionAction: 120
   });
 
   const getRate = (market: string) => {
@@ -76,7 +76,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
 
   const { stockPnl, optionPnl, aggregatedSummary } = useMemo(() => {
     const lookupMap = new Map<string, string>((lookupData?.stocks || []).map(s => [s.ticker.toUpperCase(), s.companyName]));
-    const enrich = (r: PnLData): PnLData => (!r.name && r.stock ? { ...r, name: lookupMap.get(r.stock.toUpperCase()) || r.stock } : r);
+    const enrich = (r: PnLData): PnLData => ({ ...r, name: lookupMap.get((r.stock || '').toUpperCase()) || '' });
     const stocks = data.filter(r => !r.option || !['Call', 'Put'].includes(r.option)).map(enrich);
     const options = data.filter(r => r.option && ['Call', 'Put'].includes(r.option)).map(enrich);
     
@@ -116,7 +116,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
             }
         }
     };
-  }, [data, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, marketConstants]);
+  }, [data, lookupData, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, marketConstants]);
 
   const processData = (rawData: PnLData[], config: typeof stockSortConfig, filters: FilterState) => {
       // 1. Filter by Specific Columns (Local Filters)
@@ -325,7 +325,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
               {isOption && <HeaderCell label="Option" field="option" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Strike" field="strike" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Exp" field="expiration" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
-              {isOption && <th className="px-3 py-3 text-left text-[10px] font-extrabold text-slate-500 uppercase tracking-wider whitespace-nowrap border-b border-slate-200">Action</th>}
+              {isOption && <HeaderCell label="Action" field="optionAction" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               <HeaderCell label="Name" field="name" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Mkt" field="market" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Qty" field="quantity" sortConfig={sortConfig} setSortConfig={setSortConfig} />
@@ -355,7 +355,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                 {isOption && <td className="px-3 py-2 text-[10px] text-purple-600 font-bold">{r.option}</td>}
                 {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-600">{r.strike}</td>}
                 {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.expiration}</td>}
-                {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{(r as any).optionAction || ''}</td>}
+                {isOption && <td className="px-3 py-2 text-[10px] text-slate-500 whitespace-nowrap">{(r as any).optionAction || ''}</td>}
                 <td className="px-3 py-2 text-[10px] text-slate-600 truncate">{r.name}</td>
                 <td className="px-3 py-2 text-[10px] text-slate-400">{r.market}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs">{r.quantity.toLocaleString()}</td>

@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import {
   BarChart, Bar, LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, ScatterChart, Scatter, ZAxis, ReferenceLine, Treemap
+  PieChart, Pie, Cell, ScatterChart, Scatter, ZAxis, ReferenceLine, Treemap, LabelList
 } from 'recharts';
 import {
   Info, TrendingUp, TrendingDown, Activity, BarChart3,
@@ -46,6 +46,7 @@ const getRate = (market: string, mc: MarketConstants, ticker?: string) => {
   if (ticker && /\.AX$/i.test(ticker)) return mc.aud_exg || 1;
   return 1;
 };
+const isOptionPnl = (p: PnLData) => !!p.option && /call|put/i.test(p.option);
 
 const InfoTooltip: React.FC<{ text: string }> = ({ text }) => {
   const [show, setShow] = useState(false);
@@ -341,24 +342,36 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   // ── holdingDistribution (now used in Trades tab) ──────────────────────────────
   const holdingDistribution = useMemo(() => {
     const buckets = [
-      { range: '0-7d', count: 0 },
-      { range: '8-30d', count: 0 },
-      { range: '1-3mo', count: 0 },
-      { range: '3-6mo', count: 0 },
-      { range: '6-12mo', count: 0 },
-      { range: '>1yr', count: 0 },
+      { range: '0-7d', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
+      { range: '8-30d', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
+      { range: '1-3mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
+      { range: '3-6mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
+      { range: '6-12mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
+      { range: '>1yr', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winRate: 0 },
     ];
     filtered.forEach(p => {
       const d = p.holdingDays || 0;
-      if (d <= 7) buckets[0].count++;
-      else if (d <= 30) buckets[1].count++;
-      else if (d <= 90) buckets[2].count++;
-      else if (d <= 180) buckets[3].count++;
-      else if (d <= 365) buckets[4].count++;
-      else buckets[5].count++;
+      const usd = p.realizedPnL / getRate(p.market || '', marketConstants, p.stock);
+      const bucket = d <= 7 ? buckets[0]
+        : d <= 30 ? buckets[1]
+        : d <= 90 ? buckets[2]
+        : d <= 180 ? buckets[3]
+        : d <= 365 ? buckets[4]
+        : buckets[5];
+      bucket.count++;
+      if (usd > 0) {
+        bucket.wins++;
+        bucket.winPnl += usd;
+      } else {
+        bucket.losses++;
+        bucket.lossPnl += Math.abs(usd);
+      }
+    });
+    buckets.forEach(bucket => {
+      bucket.winRate = bucket.count > 0 ? Math.round((bucket.wins / bucket.count) * 100) : 0;
     });
     return buckets;
-  }, [filtered]);
+  }, [filtered, marketConstants]);
 
   // ── stockStats ───────────────────────────────────────────────────────────────
   const stockStats = useMemo(() => {
@@ -406,12 +419,14 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
   // ── topWinnersLosers ─────────────────────────────────────────────────────────
   const topWinnersLosers = useMemo(() => {
-    const byStock = new Map<string, { stock: string; pnl: number }>();
+    const byStock = new Map<string, { stock: string; pnl: number; stockPnl: number; optionPnl: number }>();
     filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
-      const cur = byStock.get(p.stock) || { stock: p.stock, pnl: 0 };
+      const cur = byStock.get(p.stock) || { stock: p.stock, pnl: 0, stockPnl: 0, optionPnl: 0 };
       cur.pnl += usd;
+      if (isOptionPnl(p)) cur.optionPnl += usd;
+      else cur.stockPnl += usd;
       byStock.set(p.stock, cur);
     });
     const arr = Array.from(byStock.values()).sort((a, b) => b.pnl - a.pnl);
@@ -582,6 +597,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
   const fmtUsd = (v: number) => `$${Math.round(Math.abs(v)).toLocaleString()}`;
   const fmtPct = (v: number) => `${v.toFixed(1)}%`;
+  const fmtSignedUsd = (v: number) => `${v > 0 ? '+' : v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
   const displayWinners = isWinnersExpanded ? topWinnersLosers.winners : topWinnersLosers.winners.slice(0, 5);
   const displayLosers = isLosersExpanded ? topWinnersLosers.losers : topWinnersLosers.losers.slice(0, 5);
@@ -655,8 +671,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(heatRows), 'P&L Heatmap');
 
     // Sheet 3: Top Winners & Losers
-    const winnersRows = topWinnersLosers.winners.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl) }));
-    const losersRows = topWinnersLosers.losers.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl) }));
+    const winnersRows = topWinnersLosers.winners.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl), 'Stock P&L (USD)': Math.round(s.stockPnl), 'Option P&L (USD)': Math.round(s.optionPnl) }));
+    const losersRows = topWinnersLosers.losers.map((s, i) => ({ Rank: i + 1, Stock: s.stock, 'P&L (USD)': Math.round(s.pnl), 'Stock P&L (USD)': Math.round(s.stockPnl), 'Option P&L (USD)': Math.round(s.optionPnl) }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(winnersRows), 'Top Winners');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(losersRows), 'Top Losers');
 
@@ -672,7 +688,7 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(returnRows), 'Return Distribution');
 
     // Sheet 6: Holding Period Distribution
-    const holdingRows = holdingDistribution.map(b => ({ Range: b.range, 'Trade Count': b.count }));
+    const holdingRows = holdingDistribution.map(b => ({ Range: b.range, 'Trade Count': b.count, Wins: b.wins, Losses: b.losses, 'Win P&L (USD)': Math.round(b.winPnl), 'Loss P&L (USD)': Math.round(b.lossPnl), 'Win Rate (%)': b.winRate }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(holdingRows), 'Holding Period');
 
     // Sheet 7: P&L by Dimension
@@ -844,14 +860,23 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 </div>
                 <div className={`overflow-y-auto ${isWinnersExpanded ? 'max-h-[400px]' : 'max-h-[220px]'} transition-all`}>
                   <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                      <tr>
+                        <th className="px-5 py-2">#</th>
+                        <th className="px-5 py-2">Ticker</th>
+                        <th className="px-3 py-2 text-right">Stock P&L</th>
+                        <th className="px-3 py-2 text-right">Option P&L</th>
+                        <th className="px-5 py-2 text-right">Total P&L</th>
+                      </tr>
+                    </thead>
                     <tbody className="divide-y">
                       {displayWinners.map((s, i) => (
                         <tr key={s.stock} className="hover:bg-slate-50">
                           <td className="px-5 py-2.5 text-slate-400">{i + 1}</td>
                           <td className="px-5 py-2.5 font-black">{s.stock}</td>
-                          <td className="px-5 py-2.5 text-right font-black text-red-500">
-                            +${s.pnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                          </td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-500">{fmtSignedUsd(s.stockPnl)}</td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-500">{fmtSignedUsd(s.optionPnl)}</td>
+                          <td className="px-5 py-2.5 text-right font-black text-red-500">{fmtSignedUsd(s.pnl)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -874,14 +899,23 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 </div>
                 <div className={`overflow-y-auto ${isLosersExpanded ? 'max-h-[400px]' : 'max-h-[220px]'} transition-all`}>
                   <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                      <tr>
+                        <th className="px-5 py-2">#</th>
+                        <th className="px-5 py-2">Ticker</th>
+                        <th className="px-3 py-2 text-right">Stock P&L</th>
+                        <th className="px-3 py-2 text-right">Option P&L</th>
+                        <th className="px-5 py-2 text-right">Total P&L</th>
+                      </tr>
+                    </thead>
                     <tbody className="divide-y">
                       {displayLosers.map((s, i) => (
                         <tr key={s.stock} className="hover:bg-slate-50">
                           <td className="px-5 py-2.5 text-slate-400">{i + 1}</td>
                           <td className="px-5 py-2.5 font-black">{s.stock}</td>
-                          <td className="px-5 py-2.5 text-right font-black text-emerald-500">
-                            -${Math.abs(s.pnl).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                          </td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-500">{fmtSignedUsd(s.stockPnl)}</td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-500">{fmtSignedUsd(s.optionPnl)}</td>
+                          <td className="px-5 py-2.5 text-right font-black text-emerald-500">{fmtSignedUsd(s.pnl)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -937,6 +971,34 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                     ))}
                   </Bar>
                 </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* B1.75: Win/Loss by Holding Period */}
+            <Card>
+              <SectionHeader
+                title="Win/Loss by Holding Period"
+                info="Realized profit and loss amounts for each holding-period bucket, converted to USD. The line shows win rate by trade count."
+                icon={<Target size={16} />}
+              />
+              <ResponsiveContainer width="100%" height={240}>
+                <ComposedChart data={holdingDistribution}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="range" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="usd" tickFormatter={v => `$${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 10 }} />
+                  <Tooltip formatter={(v: any, name: string) => [name === 'Win Rate' ? `${v}%` : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, name]} />
+                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  <Bar yAxisId="usd" dataKey="winPnl" name="Win P&L" stackId="holding" fill="#ef4444" radius={[0, 0, 0, 0]}>
+                    <LabelList dataKey="winPnl" position="center" formatter={(v: any) => `$${Math.round(Number(v) / 1000)}k`} style={{ fill: '#ffffff', fontSize: 10, fontWeight: 700 }} />
+                  </Bar>
+                  <Bar yAxisId="usd" dataKey="lossPnl" name="Loss P&L" stackId="holding" fill="#10b981" radius={[4, 4, 0, 0]}>
+                    <LabelList dataKey="lossPnl" position="center" formatter={(v: any) => `$${Math.round(Number(v) / 1000)}k`} style={{ fill: '#ffffff', fontSize: 10, fontWeight: 700 }} />
+                  </Bar>
+                  <Line yAxisId="pct" type="monotone" dataKey="winRate" name="Win Rate" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }}>
+                    <LabelList dataKey="winRate" position="top" formatter={(v: any) => `${v}%`} style={{ fill: '#6366f1', fontSize: 10, fontWeight: 700 }} />
+                  </Line>
+                </ComposedChart>
               </ResponsiveContainer>
             </Card>
 

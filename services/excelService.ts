@@ -526,7 +526,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     id: row.id || generateId(),
                     tradeNumber: parseNumeric(row['No.']),
                     stock: row['Stock'] || '',
-                    name: row['Name'] || '',
+                    name: '',
                     market: row['Market'] || '',
                     account: row['Account'] || '',
                     option: row['Option'] || '',
@@ -622,7 +622,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                             const sellDate = new Date(sellRow.date);
                             const diffTime = Math.abs(sellDate.getTime() - new Date(buyRow.date).getTime());
                             pnlData.push({
-                                id: generateId(), tradeNumber: no, stock: buyRow.stock, name: buyRow.name, market: buyRow.market, account: buyRow.account, option: buyRow.option, quantity: qty,
+                                id: generateId(), tradeNumber: no, stock: buyRow.stock, name: '', market: buyRow.market, account: buyRow.account, option: buyRow.option, quantity: qty,
                                 buyDate: buyRow.date, buyPrice: bPrice, buyComm: bComm, totalBuy, sellDate: sellRow.date, sellPrice: sPrice, sellComm: sComm, totalSell, realizedPnL, returnPercent,
                                 year: sellDate.getFullYear(), month: sellDate.getMonth() + 1, holdingDays: Math.ceil(diffTime / (1000 * 60 * 60 * 24)),
                                 strike: buyRow.strike, expiration: buyRow.expiration,

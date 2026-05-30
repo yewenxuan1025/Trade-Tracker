@@ -19,22 +19,20 @@ import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, 
 // so the dedicated Action column always reflects the closing action.
 const OPTION_ACTION_NAMES = new Set(['buy to cover', 'close position', 'assignment', 'expire']);
 
-const repairOptionPnlRecord = (p: PnLData, lookup: LookupSheetData | null): PnLData => {
+const enrichPnlRecord = (p: PnLData, lookup: LookupSheetData | null): PnLData => {
   const isOption = !!p.option && /call|put/i.test(p.option);
-  if (!isOption) return p;
   const lu = lookup?.stocks.find(s => s.ticker.toUpperCase() === (p.stock || '').toUpperCase());
-  const nameIsAction = !!p.name && OPTION_ACTION_NAMES.has(p.name.trim().toLowerCase());
-  let next = p;
-  if (nameIsAction) {
-    next = { ...next, optionAction: p.optionAction || p.name, name: lu?.companyName || '' };
-  } else if ((!p.name || p.name === p.stock) && lu?.companyName) {
-    next = { ...next, name: lu.companyName };
-  } else if (lu?.companyName && p.name !== lu.companyName) {
-    // Refresh stale company names from current lookup
-    next = { ...next, name: lu.companyName };
-  }
-  return next;
+  const nameIsAction = isOption && !!p.name && OPTION_ACTION_NAMES.has(p.name.trim().toLowerCase());
+  return {
+    ...p,
+    optionAction: nameIsAction ? (p.optionAction || p.name) : p.optionAction,
+    // P&L company names always come from Lookup Data, never from imported P&L sheets.
+    name: lu?.companyName || '',
+  };
 };
+
+const enrichPnlRecords = (records: PnLData[], lookup: LookupSheetData | null): PnLData[] =>
+  records.map(p => enrichPnlRecord(p, lookup));
 
 const STORAGE_KEY = 'trade_tracker_market_constants';
 const LOOKUP_DATA_KEY = 'trade_tracker_lookup_data';
@@ -200,7 +198,7 @@ const App: React.FC = () => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
     setOptionTransactions(prev => enrichOptionTransactions(prev, lookupData));
-    setPnlData(prev => prev.map(p => repairOptionPnlRecord(p, lookupData)));
+    setPnlData(prev => enrichPnlRecords(prev, lookupData));
   }, [lookupData, enrichTransactions, enrichOptionTransactions]);
 
   // #5: Auto-recalculate cash position whenever relevant data changes
@@ -251,7 +249,7 @@ const App: React.FC = () => {
       setLookupData(result.lookup);
       setTransactions(enrichTransactions(result.transactions, result.lookup));
       setOptionTransactions(enrichOptionTransactions(result.optionTransactions, result.lookup));
-      setPnlData(result.pnl);
+      setPnlData(enrichPnlRecords(result.pnl, result.lookup));
       setNavData(result.navData);
       // Load benchmark if present in the uploaded file
       if (result.benchmark && result.benchmark.length > 0) {
@@ -392,7 +390,7 @@ const App: React.FC = () => {
       });
 
       // 4. Append PnL
-      setPnlData(prev => [...prev, ...result.pnl]);
+      setPnlData(prev => [...prev, ...enrichPnlRecords(result.pnl, result.lookup.stocks.length > 0 ? result.lookup : lookupData)]);
 
       // 5. Append NAV (deduplicate by date)
       setNavData(prev => {
@@ -551,8 +549,9 @@ const App: React.FC = () => {
       const qty = Math.abs(buy.shares);
       const nextNo = pnlData.length > 0 ? Math.max(...pnlData.map(p => p.tradeNumber || 0)) + 1 : 1;
 
+      const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
       const newPnl: PnLData = {
-          id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: buy.name, market: buy.market,
+          id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: lu?.companyName || '', market: buy.market,
           account: buy.source, quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission,
           totalBuy: buy.total, sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission,
           totalSell: (sell.price * qty) - sell.commission,
@@ -564,7 +563,7 @@ const App: React.FC = () => {
       setPnlData(prev => [...prev, newPnl]);
       setTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
       showToast("Stock P&L record created successfully!", 'success');
-  }, [transactions, pnlData]);
+  }, [transactions, pnlData, lookupData]);
 
   const handleCreateOptionPnL = useCallback((ids: string[], optionAction?: string) => {
     if (ids.length !== 2) return;
@@ -591,8 +590,7 @@ const App: React.FC = () => {
 
     // Resolve company name: prefer current lookup, never accept an action string as the name.
     const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
-    const buyNameIsAction = !!buy.name && OPTION_ACTION_NAMES.has(buy.name.trim().toLowerCase());
-    const resolvedName = lu?.companyName || (buyNameIsAction ? '' : buy.name) || '';
+    const resolvedName = lu?.companyName || '';
 
     const newPnl: PnLData = {
         id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: resolvedName, market: buy.market || 'US',
@@ -708,7 +706,7 @@ const App: React.FC = () => {
             setTransactions(enrichTransactions(result.transactions, lookupData));
         }
         else if (section === 'option_transaction') setOptionTransactions(enrichOptionTransactions(result.optionTransactions, lookupData));
-        else if (section === 'pnl') setPnlData(result.pnl);
+        else if (section === 'pnl') setPnlData(enrichPnlRecords(result.pnl, lookupData));
         else if (section === 'nav') { if (result.navData.length > 0) setNavData(result.navData); }
     } catch (e) { showToast("Error uploading " + section + ": " + (e as Error).message, 'error'); }
   };
