@@ -341,20 +341,38 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
   // ── holdingDistribution (now used in Trades tab) ──────────────────────────────
   const holdingDistribution = useMemo(() => {
+    const createBucket = (range: string) => ({
+      range,
+      count: 0,
+      wins: 0,
+      losses: 0,
+      winPnl: 0,
+      lossPnl: 0,
+      winReturns: [] as number[],
+      lossReturns: [] as number[],
+      medianWinReturn: 0,
+      medianLossReturn: 0,
+      winRate: 0,
+    });
+    const median = (arr: number[]) => {
+      if (!arr.length) return 0;
+      const s = [...arr].sort((a, b) => a - b);
+      const m = Math.floor(s.length / 2);
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    };
     const buckets = [
-      { range: '0-7d', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
-      { range: '8-30d', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
-      { range: '1-3mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
-      { range: '3-6mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
-      { range: '6-12mo', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
-      { range: '>1yr', count: 0, wins: 0, losses: 0, winPnl: 0, lossPnl: 0, winCost: 0, lossCost: 0, winRatio: 0, lossRatio: 0, winRate: 0 },
+      createBucket('0-7d'),
+      createBucket('8-30d'),
+      createBucket('1-3mo'),
+      createBucket('3-6mo'),
+      createBucket('6-12mo'),
+      createBucket('>1yr'),
     ];
     filtered.forEach(p => {
       const d = p.holdingDays || 0;
       const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
-      const fallbackCost = (p.buyPrice || 0) * Math.abs(p.quantity || 0);
-      const costUsd = Math.abs((p.totalBuy || fallbackCost) / rate);
+      const returnPct = Number.isFinite(p.returnPercent) ? p.returnPercent : 0;
       const bucket = d <= 7 ? buckets[0]
         : d <= 30 ? buckets[1]
         : d <= 90 ? buckets[2]
@@ -365,17 +383,17 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       if (usd > 0) {
         bucket.wins++;
         bucket.winPnl += usd;
-        bucket.winCost += costUsd;
+        bucket.winReturns.push(Math.abs(returnPct));
       } else {
         bucket.losses++;
         bucket.lossPnl += usd;
-        bucket.lossCost += costUsd;
+        bucket.lossReturns.push(-Math.abs(returnPct));
       }
     });
     buckets.forEach(bucket => {
       bucket.winRate = bucket.count > 0 ? Math.round((bucket.wins / bucket.count) * 100) : 0;
-      bucket.winRatio = bucket.winCost > 0 ? Math.round((bucket.winPnl / bucket.winCost) * 1000) / 10 : 0;
-      bucket.lossRatio = bucket.lossCost > 0 ? Math.round((bucket.lossPnl / bucket.lossCost) * 1000) / 10 : 0;
+      bucket.medianWinReturn = Math.round(median(bucket.winReturns) * 10) / 10;
+      bucket.medianLossReturn = Math.round(median(bucket.lossReturns) * 10) / 10;
     });
     return buckets;
   }, [filtered, marketConstants]);
@@ -623,6 +641,44 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const n = Number(v);
     return n === 0 ? '' : fmtSignedPct(n);
   };
+  const renderBarLabel = (formatter: (v: any) => string, fill: string) => ({ x, y, width, height, value }: any) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n === 0) return null;
+    const labelX = Number(x) + Number(width) / 2;
+    const labelY = n >= 0 ? Number(y) - 8 : Number(y) + Number(height) + 12;
+    return (
+      <text
+        x={labelX}
+        y={labelY}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill={fill}
+        fontSize={10}
+        fontWeight={800}
+        stroke="#ffffff"
+        strokeWidth={3}
+        paintOrder="stroke"
+      >
+        {formatter(n)}
+      </text>
+    );
+  };
+  const renderLinePctLabel = ({ x, y, value }: any) => (
+    <text
+      x={Number(x)}
+      y={Number(y) - 10}
+      textAnchor="middle"
+      dominantBaseline="middle"
+      fill="#6366f1"
+      fontSize={10}
+      fontWeight={800}
+      stroke="#ffffff"
+      strokeWidth={3}
+      paintOrder="stroke"
+    >
+      {`${Number(value).toFixed(0)}%`}
+    </text>
+  );
 
   const holdingUsdDomain = useMemo<[number, number]>(() => {
     const maxAbs = Math.max(1, ...holdingDistribution.flatMap(b => [Math.abs(b.winPnl), Math.abs(b.lossPnl)]));
@@ -634,15 +690,18 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return [-limit, -limit / 2, 0, limit / 2, limit];
   }, [holdingUsdDomain]);
 
-  const holdingRatioDomain = useMemo<[number, number]>(() => {
-    const maxAbs = Math.max(10, ...holdingDistribution.flatMap(b => [Math.abs(b.winRatio), Math.abs(b.lossRatio)]));
+  const holdingReturnDomain = useMemo<[number, number]>(() => {
+    const maxAbs = Math.max(
+      10,
+      ...holdingDistribution.flatMap(b => [Math.abs(b.medianWinReturn), Math.abs(b.medianLossReturn)])
+    );
     const limit = Math.ceil(maxAbs * 1.12);
     return [-limit, limit];
   }, [holdingDistribution]);
-  const holdingRatioTicks = useMemo(() => {
-    const limit = Math.max(Math.abs(holdingRatioDomain[0]), Math.abs(holdingRatioDomain[1]));
+  const holdingReturnTicks = useMemo(() => {
+    const limit = Math.max(Math.abs(holdingReturnDomain[0]), Math.abs(holdingReturnDomain[1]));
     return [-limit, -limit / 2, 0, limit / 2, limit];
-  }, [holdingRatioDomain]);
+  }, [holdingReturnDomain]);
 
   const streakUsdDomain = useMemo<[number, number]>(() => {
     const maxAbs = Math.max(1, ...streakData.data.map(d => Math.abs(d.pnl)));
@@ -746,8 +805,8 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       Losses: b.losses,
       'Win P&L (USD)': Math.round(b.winPnl),
       'Loss P&L (USD)': Math.round(b.lossPnl),
-      'Win Ratio (%)': b.winRatio,
-      'Loss Ratio (%)': b.lossRatio,
+      'Median Win Return (%)': b.medianWinReturn,
+      'Median Loss Return (%)': b.medianLossReturn,
       'Win Rate (%)': b.winRate,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(holdingRows), 'Holding Period');
@@ -1039,49 +1098,67 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             <Card>
               <SectionHeader
                 title="Win/Loss by Holding Period"
-                info="Realized P&L and P&L-to-cost ratios by holding-period bucket. Loss values plot below the zero axis; the line shows win rate by trade count."
+                info="Realized P&L by holding-period bucket. Loss values plot below the zero axis; the line shows win rate by trade count."
                 icon={<Target size={16} />}
               />
-              <ResponsiveContainer width="100%" height={320}>
-                <ComposedChart data={holdingDistribution} barGap={3} barCategoryGap="14%" margin={{ top: 8, right: 54, bottom: 0, left: 8 }}>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={holdingDistribution} barGap={10} barCategoryGap="26%" margin={{ top: 24, right: 28, bottom: 10, left: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                   <XAxis dataKey="range" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="usd" domain={holdingUsdDomain} ticks={holdingUsdTicks} tickFormatter={v => fmtCompactUsd(Number(v))} tick={{ fontSize: 10 }} />
                   <YAxis
-                    yAxisId="ratio"
+                    yAxisId="rate"
                     orientation="right"
-                    domain={holdingRatioDomain}
-                    ticks={holdingRatioTicks}
-                    width={64}
+                    domain={[0, 100]}
+                    ticks={[0, 25, 50, 75, 100]}
+                    width={52}
                     tickMargin={8}
-                    tickFormatter={v => `${Number(v).toFixed(1)}%`}
+                    tickFormatter={v => `${v}%`}
                     tick={{ fontSize: 10 }}
                   />
-                  <YAxis yAxisId="rate" orientation="right" domain={[0, 100]} hide />
                   <Tooltip
                     formatter={(v: any, name: string) => {
                       const n = Number(v);
-                      return [name.includes('Ratio') || name === 'Win Rate' ? `${n.toFixed(1)}%` : fmtSignedUsd(n), name];
+                      return [name === 'Win Rate' ? `${n.toFixed(1)}%` : fmtSignedUsd(n), name];
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: '11px' }} />
                   <ReferenceLine yAxisId="usd" y={0} stroke="#64748b" strokeWidth={1.5} />
                   <Bar yAxisId="usd" dataKey="winPnl" name="Win P&L" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={24}>
-                    <LabelList dataKey="winPnl" position="center" formatter={fmtCompactUsdLabel} style={{ fill: '#ffffff', fontSize: 10, fontWeight: 700 }} />
+                    <LabelList dataKey="winPnl" content={renderBarLabel(fmtCompactUsdLabel, '#ef4444')} />
                   </Bar>
                   <Bar yAxisId="usd" dataKey="lossPnl" name="Loss P&L" fill="#10b981" radius={[0, 0, 4, 4]} barSize={24}>
-                    <LabelList dataKey="lossPnl" position="center" formatter={fmtCompactUsdLabel} style={{ fill: '#ffffff', fontSize: 10, fontWeight: 700 }} />
-                  </Bar>
-                  <Bar yAxisId="ratio" dataKey="winRatio" name="Win Ratio" fill="#f97316" radius={[4, 4, 0, 0]} barSize={20}>
-                    <LabelList dataKey="winRatio" position="center" formatter={fmtPctLabel} style={{ fill: '#ffffff', fontSize: 9, fontWeight: 700 }} />
-                  </Bar>
-                  <Bar yAxisId="ratio" dataKey="lossRatio" name="Loss Ratio" fill="#059669" radius={[0, 0, 4, 4]} barSize={20}>
-                    <LabelList dataKey="lossRatio" position="center" formatter={fmtPctLabel} style={{ fill: '#ffffff', fontSize: 9, fontWeight: 700 }} />
+                    <LabelList dataKey="lossPnl" content={renderBarLabel(fmtCompactUsdLabel, '#059669')} />
                   </Bar>
                   <Line yAxisId="rate" type="monotone" dataKey="winRate" name="Win Rate" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }}>
-                    <LabelList dataKey="winRate" position="top" formatter={(v: any) => `${v}%`} style={{ fill: '#6366f1', fontSize: 10, fontWeight: 700 }} />
+                    <LabelList dataKey="winRate" content={renderLinePctLabel} />
                   </Line>
                 </ComposedChart>
+              </ResponsiveContainer>
+            </Card>
+
+            {/* B1.875: Median Win/Loss Return by Holding Period */}
+            <Card>
+              <SectionHeader
+                title="Median Win/Loss Return by Holding Period"
+                info="Median return of winning and losing trades in each holding-period bucket. Winning medians plot above zero; losing medians plot below zero."
+                icon={<Target size={16} />}
+              />
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={holdingDistribution} barGap={14} barCategoryGap="30%" margin={{ top: 28, right: 28, bottom: 18, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="range" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={holdingReturnDomain} ticks={holdingReturnTicks} tickFormatter={v => `${Number(v).toFixed(1)}%`} tick={{ fontSize: 10 }} />
+                  <Tooltip formatter={(v: any, name: string) => [`${Number(v).toFixed(1)}%`, name]} />
+                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  <ReferenceLine y={0} stroke="#64748b" strokeWidth={1.5} />
+                  <Bar dataKey="medianWinReturn" name="Median Win Return" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={28}>
+                    <LabelList dataKey="medianWinReturn" content={renderBarLabel(fmtPctLabel, '#ef4444')} />
+                  </Bar>
+                  <Bar dataKey="medianLossReturn" name="Median Loss Return" fill="#10b981" radius={[0, 0, 4, 4]} barSize={28}>
+                    <LabelList dataKey="medianLossReturn" content={renderBarLabel(fmtPctLabel, '#059669')} />
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </Card>
 
