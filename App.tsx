@@ -133,14 +133,21 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Calculate Option Position MV from Option Transactions
-  // Sign convention: long positions (net buy) are POSITIVE MV; short positions (net sell) are NEGATIVE MV.
-  // Transaction "total" is signed as cash flow (buy = -|p*sh|-comm, sell = +|p*sh|-comm), so we negate
-  // to get the option asset/liability value. This also keeps total portfolio MV consistent because
-  // cashPosition already absorbs openOptionCost = sum(total) (see useEffect below).
+  const toUsdByMarket = useCallback((amount: number, market: string, ticker?: string) => {
+      const m = (market || '').toUpperCase().trim();
+      if (m === 'HK') return amount / (marketConstants.exg_rate || 1);
+      if (m === 'AUS' || m === 'AUD' || m === 'AU' || m === 'AUSTRALIA') return amount / (marketConstants.aud_exg || 1);
+      if (m === 'SG') return amount / (marketConstants.sg_exg || 1);
+      if (ticker && /\.AX$/i.test(ticker)) return amount / (marketConstants.aud_exg || 1);
+      return amount;
+  }, [marketConstants]);
+
+  // Calculate Option Position MV from Option Transactions.
+  // Sign convention follows the option transaction total / Holdings display:
+  // long positions (net buy) are negative MV; short positions (net sell) are positive MV.
   const optionPosition = useMemo(() => {
-      return -optionTransactions.reduce((sum, t) => sum + (t.total || 0), 0);
-  }, [optionTransactions]);
+      return optionTransactions.reduce((sum, t) => sum + toUsdByMarket(t.total || 0, t.market || '', t.stock), 0);
+  }, [optionTransactions, toUsdByMarket]);
 
   const [activeTab, setActiveTab] = useState<'summary' | 'analytics' | 'lookup' | 'transactions' | 'pnl' | 'history' | 'nav'>('summary');
 
@@ -210,15 +217,6 @@ const App: React.FC = () => {
       if (c === 'HKD') return amount / mc.exg_rate;
       if (c === 'AUD') return amount / mc.aud_exg;
       if (c === 'SGD') return amount / mc.sg_exg;
-      return amount;
-    };
-    const toUsdByMarket = (amount: number, market: string, ticker?: string) => {
-      const m = (market || '').toUpperCase().trim();
-      if (m === 'HK') return amount / (mc.exg_rate || 1);
-      if (m === 'AUS' || m === 'AUD' || m === 'AU' || m === 'AUSTRALIA') return amount / (mc.aud_exg || 1);
-      if (m === 'SG') return amount / (mc.sg_exg || 1);
-      // Defensive: AUS tickers often end in .AX
-      if (ticker && /\.AX$/i.test(ticker)) return amount / (mc.aud_exg || 1);
       return amount;
     };
     const EXCLUDED = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);

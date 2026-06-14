@@ -339,7 +339,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       const r = getRate(a.market, a.stock, marketConstants) || 1;
       const netContracts = a.longContracts - a.shortContracts;
       const totalCostUsd = a.totalCashFlowLocal / r;       // signed cash flow in USD (buy = negative)
-      const lastMvUsd = -a.totalCashFlowLocal / r;          // long → positive MV; short → negative MV
+      const lastMvUsd = a.totalCashFlowLocal / r;           // long → negative MV; short → positive MV
       const premiumPaidUsd = a.premiumPaidLocal / r;
       const premiumReceivedUsd = a.premiumReceivedLocal / r;
       const avgStrike = a.strikeWeightDenom > 0 ? a.strikeWeighted / a.strikeWeightDenom : 0;
@@ -1063,7 +1063,7 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
               </table>
             </div>
             <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-500 italic">
-              MV is positive for net long positions and negative for net short positions. Cost basis is the signed sum of transaction cash flows in USD. Avg Strike is weighted by contract count.
+              MV is negative for net long positions and positive for net short positions. Cost basis is the signed sum of transaction cash flows in USD. Avg Strike is weighted by contract count.
             </div>
           </div>
         </section>
