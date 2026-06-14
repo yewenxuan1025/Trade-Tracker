@@ -11,7 +11,7 @@ import {
   PieChart as PieChartIcon, Target, Zap, Award, Clock,
   Upload, X, ChevronDown, ChevronUp, Layers, Archive, Calendar, Download
 } from 'lucide-react';
-import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData } from '../types';
+import { PnLData, TransactionData, LookupSheetData, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, TYPE_OPTIONS, CATEGORY_OPTIONS, CLASS_OPTIONS } from '../types';
 import { calculatePortfolioAnalysis } from '../services/excelService';
 
 interface AnalyticsDashboardProps {
@@ -32,6 +32,14 @@ interface AnalyticsDashboardProps {
 }
 
 const CHART_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#84cc16', '#f97316'];
+
+const cleanDimensionValue = (value?: string) => (value || '').trim().replace(/\s+/g, ' ');
+const normalizeDimensionKey = (value?: string) => cleanDimensionValue(value).toLowerCase() || 'other';
+const getDimensionDisplayName = (value: string | undefined, standardOptions: string[]) => {
+  const key = normalizeDimensionKey(value);
+  const standard = standardOptions.find(option => normalizeDimensionKey(option) === key);
+  return standard || cleanDimensionValue(value) || 'Other';
+};
 
 const AUS_MARKETS_ANALYTICS = new Set(['AUS', 'AUD', 'AU', 'AUSTRALIA']);
 const isAusHolding = (market: string, ticker?: string) => {
@@ -278,25 +286,31 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const stockMap = new Map<string, { type: string; category: string; class: string }>();
     (lookupData?.stocks || []).forEach(s =>
       stockMap.set(s.ticker.toUpperCase(), {
-        type: s.type || 'Other',
-        category: s.category || 'Other',
-        class: s.class || 'Other',
+        type: getDimensionDisplayName(s.type, TYPE_OPTIONS),
+        category: getDimensionDisplayName(s.category, CATEGORY_OPTIONS),
+        class: getDimensionDisplayName(s.class, CLASS_OPTIONS),
       })
     );
-    const byType = new Map<string, number>(),
-      byCategory = new Map<string, number>(),
-      byClass = new Map<string, number>();
+    const byType = new Map<string, { name: string; value: number }>(),
+      byCategory = new Map<string, { name: string; value: number }>(),
+      byClass = new Map<string, { name: string; value: number }>();
+    const addDimensionValue = (map: Map<string, { name: string; value: number }>, name: string, value: number) => {
+      const key = normalizeDimensionKey(name);
+      const current = map.get(key) || { name, value: 0 };
+      current.value += value;
+      map.set(key, current);
+    };
     filtered.forEach(p => {
       const rate = getRate(p.market || '', marketConstants, p.stock);
       const usd = p.realizedPnL / rate;
       const info = stockMap.get(p.stock.toUpperCase()) || { type: 'Other', category: 'Other', class: 'Other' };
-      byType.set(info.type, (byType.get(info.type) || 0) + usd);
-      byCategory.set(info.category, (byCategory.get(info.category) || 0) + usd);
-      byClass.set(info.class, (byClass.get(info.class) || 0) + usd);
+      addDimensionValue(byType, info.type, usd);
+      addDimensionValue(byCategory, info.category, usd);
+      addDimensionValue(byClass, info.class, usd);
     });
-    const toArr = (m: Map<string, number>) =>
-      Array.from(m.entries())
-        .map(([name, value]) => ({ name, value: Math.round(value) }))
+    const toArr = (m: Map<string, { name: string; value: number }>) =>
+      Array.from(m.values())
+        .map(({ name, value }) => ({ name, value: Math.round(value) }))
         .sort((a, b) => b.value - a.value);
     return { byType: toArr(byType), byCategory: toArr(byCategory), byClass: toArr(byClass) };
   }, [filtered, lookupData, marketConstants]);
