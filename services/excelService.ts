@@ -49,6 +49,7 @@ const parseNumeric = (val: any, precision?: number): number => {
  */
 const parseExcelDate = (val: any): string => {
   if (!val) return '';
+  if (val instanceof Date) return val.toISOString().split('T')[0];
   if (typeof val === 'string') return val;
   if (typeof val === 'number') {
     const date = new Date((val - 25569) * 86400 * 1000);
@@ -173,9 +174,91 @@ export interface ParseResult {
   dividends: DividendData[];
   interest: InterestData[];
   cashLedger: CashLedgerEntry[];
+  portfolioCashPosition?: number;
+  reportDate?: string;
   benchmark: BenchmarkData;
   warnings: string[];
 }
+
+const normalizeWorkbookLabel = (val: any): string =>
+  String(val ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const hasCellValue = (val: any): boolean =>
+  val !== null && val !== undefined && String(val).trim() !== '';
+
+const parsePortfolioCashPosition = (workbook: XLSX.WorkBook): number | undefined => {
+  const sheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'portfolio summary');
+  if (!sheetName) return undefined;
+
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
+  let categoryCol = 0;
+  let valueCol = 1;
+  let headerRowIndex = -1;
+
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const normalized = (rows[i] || []).map(normalizeWorkbookLabel);
+    const categoryIndex = normalized.findIndex(label => ['category', 'metric', 'item'].includes(label));
+    const valueIndex = normalized.findIndex(label => ['value', 'amount', 'usd value'].includes(label));
+    if (categoryIndex !== -1 && valueIndex !== -1) {
+      categoryCol = categoryIndex;
+      valueCol = valueIndex;
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  for (let i = Math.max(headerRowIndex + 1, 0); i < rows.length; i++) {
+    const row = rows[i] || [];
+    const category = normalizeWorkbookLabel(row[categoryCol]);
+    if (category !== 'cash position' && category !== 'cash position usd') continue;
+
+    const rawValue = hasCellValue(row[valueCol]) ? row[valueCol] : row[categoryCol + 1];
+    if (!hasCellValue(rawValue)) return undefined;
+    return parseFloat(parseNumeric(rawValue).toFixed(2));
+  }
+
+  return undefined;
+};
+
+const parseReportDate = (workbook: XLSX.WorkBook): string | undefined => {
+  const sheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'report info');
+  if (!sheetName) return undefined;
+
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
+  let metricCol = 0;
+  let valueCol = 1;
+  let headerRowIndex = -1;
+
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const normalized = (rows[i] || []).map(normalizeWorkbookLabel);
+    const metricIndex = normalized.findIndex(label => ['metric', 'category', 'item'].includes(label));
+    const valueIndex = normalized.findIndex(label => label === 'value');
+    if (metricIndex !== -1 && valueIndex !== -1) {
+      metricCol = metricIndex;
+      valueCol = valueIndex;
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  for (let i = Math.max(headerRowIndex + 1, 0); i < rows.length; i++) {
+    const row = rows[i] || [];
+    if (normalizeWorkbookLabel(row[metricCol]) !== 'report date') continue;
+
+    const rawValue = hasCellValue(row[valueCol]) ? row[valueCol] : row[metricCol + 1];
+    if (!hasCellValue(rawValue)) return undefined;
+    return parseExcelDate(rawValue);
+  }
+
+  return undefined;
+};
 
 /** Parse the "Benchmark Indicies" Excel file (4 metadata rows, then Date + N index columns) */
 export const parseBenchmarkFile = async (file: File): Promise<BenchmarkData> => {
@@ -300,6 +383,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         if (!data) throw new Error("File is empty");
         const workbook = XLSX.read(data, { type: 'array' });
         const warnings: string[] = [];
+        const portfolioCashPosition = parsePortfolioCashPosition(workbook);
+        const reportDate = parseReportDate(workbook);
 
         // --- PARSE LOOKUP SHEET ---
         const lookupSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'lookup');
@@ -735,7 +820,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
           }
         }
 
-        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, benchmark: benchmarkResult, warnings });
+        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, portfolioCashPosition, reportDate, benchmark: benchmarkResult, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);

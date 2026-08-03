@@ -47,6 +47,45 @@ const INTEREST_DATA_KEY = 'trade_tracker_interest';
 const CASH_LEDGER_KEY = 'trade_tracker_cash_ledger';
 const BENCHMARK_DATA_KEY = 'trade_tracker_benchmark_data';
 
+const CASH_LEDGER_EXCLUDED_TYPES = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
+
+const toUsdByCurrency = (amount: number, currency: string, mc: MarketConstants) => {
+  const c = (currency || 'USD').toUpperCase();
+  if (c === 'HKD') return amount / (mc.exg_rate || 1);
+  if (c === 'AUD') return amount / (mc.aud_exg || 1);
+  if (c === 'SGD') return amount / (mc.sg_exg || 1);
+  return amount;
+};
+
+const toUsdByMarketValue = (amount: number, market: string, ticker: string | undefined, mc: MarketConstants) => {
+  const m = (market || '').toUpperCase().trim();
+  if (m === 'HK') return amount / (mc.exg_rate || 1);
+  if (m === 'AUS' || m === 'AUD' || m === 'AU' || m === 'AUSTRALIA') return amount / (mc.aud_exg || 1);
+  if (m === 'SG') return amount / (mc.sg_exg || 1);
+  if (ticker && /\.AX$/i.test(ticker)) return amount / (mc.aud_exg || 1);
+  return amount;
+};
+
+const calculateAutoCashPosition = (
+  txns: TransactionData[],
+  optTxns: TransactionData[],
+  pnl: PnLData[],
+  divs: DividendData[],
+  ints: InterestData[],
+  ledger: CashLedgerEntry[],
+  mc: MarketConstants,
+) => {
+  const netLedger = ledger
+    .filter(e => !CASH_LEDGER_EXCLUDED_TYPES.has((e.type || '').toLowerCase().replace(/[-\s]+/g, '')))
+    .reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency, mc), 0);
+  const realizedPnl = pnl.reduce((s, p) => s + toUsdByMarketValue(p.realizedPnL, p.market || '', p.stock, mc), 0);
+  const dividends = divs.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency, mc), 0);
+  const interest = ints.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency, mc), 0);
+  const openStockCost = txns.reduce((s, t) => s + toUsdByMarketValue(t.total, t.market, t.stock, mc), 0);
+  const openOptionCost = optTxns.reduce((s, t) => s + toUsdByMarketValue(t.total, t.market, t.stock, mc), 0);
+  return parseFloat((netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost).toFixed(2));
+};
+
 const App: React.FC = () => {
   const { showToast } = useToast();
   const [lookupData, setLookupData] = useState<LookupSheetData | null>(() => {
@@ -101,6 +140,11 @@ const App: React.FC = () => {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : { date: new Date().toISOString().split('T')[0], exg_rate: 7.8, aud_exg: 1.5, sg_exg: 1.3 };
   });
+
+  const applyReportDate = useCallback((reportDate?: string) => {
+    if (!reportDate) return;
+    setMarketConstants(prev => prev.date === reportDate ? prev : { ...prev, date: reportDate });
+  }, []);
 
   // Auto-calculated cash position (from ledger + PnL + transactions)
   const [cashPosition, setCashPosition] = useState<number>(() => {
@@ -210,29 +254,23 @@ const App: React.FC = () => {
 
   // #5: Auto-recalculate cash position whenever relevant data changes
   useEffect(() => {
-    if (!cashLedger.length && !pnlData.length && !transactions.length && !optionTransactions.length) return;
-    const mc = marketConstants;
-    const toUsdByCurrency = (amount: number, currency: string) => {
-      const c = (currency || 'USD').toUpperCase();
-      if (c === 'HKD') return amount / mc.exg_rate;
-      if (c === 'AUD') return amount / mc.aud_exg;
-      if (c === 'SGD') return amount / mc.sg_exg;
-      return amount;
-    };
-    const EXCLUDED = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
-    const netLedger = cashLedger.filter(e => !EXCLUDED.has((e.type || '').toLowerCase().replace(/[-\s]+/g, ''))).reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
-    const realizedPnl = pnlData.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || '', p.stock), 0);
-    const dividends = dividendData.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
-    const interest = interestData.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
-    const openStockCost = transactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market, t.stock), 0);
-    const openOptionCost = optionTransactions.reduce((s, t) => s + toUsdByMarket(t.total, t.market, t.stock), 0);
-    setCashPosition(parseFloat((netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost).toFixed(2)));
+    if (!cashLedger.length && !pnlData.length && !transactions.length && !optionTransactions.length && !dividendData.length && !interestData.length) return;
+    setCashPosition(calculateAutoCashPosition(
+      transactions,
+      optionTransactions,
+      pnlData,
+      dividendData,
+      interestData,
+      cashLedger,
+      marketConstants,
+    ));
   }, [transactions, optionTransactions, pnlData, dividendData, interestData, cashLedger, marketConstants]);
 
   const handleFileProcess = async (file: File) => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
+      applyReportDate(result.reportDate);
       if (lookupData) {
           const oldMap = new Map<string, StockData>();
           lookupData.stocks.forEach(s => oldMap.set(s.ticker.toUpperCase(), s));
@@ -244,10 +282,17 @@ const App: React.FC = () => {
               return ns;
           });
       }
+      const nextTransactions = enrichTransactions(result.transactions, result.lookup);
+      const nextOptionTransactions = enrichOptionTransactions(result.optionTransactions, result.lookup);
+      const nextPnlData = enrichPnlRecords(result.pnl, result.lookup);
+      const nextDividends = result.dividends.length > 0 ? result.dividends : dividendData;
+      const nextInterest = result.interest.length > 0 ? result.interest : interestData;
+      const nextCashLedger = result.cashLedger.length > 0 ? result.cashLedger : cashLedger;
+
       setLookupData(result.lookup);
-      setTransactions(enrichTransactions(result.transactions, result.lookup));
-      setOptionTransactions(enrichOptionTransactions(result.optionTransactions, result.lookup));
-      setPnlData(enrichPnlRecords(result.pnl, result.lookup));
+      setTransactions(nextTransactions);
+      setOptionTransactions(nextOptionTransactions);
+      setPnlData(nextPnlData);
       setNavData(result.navData);
       // Load benchmark if present in the uploaded file
       if (result.benchmark && result.benchmark.length > 0) {
@@ -260,62 +305,20 @@ const App: React.FC = () => {
       if (result.cashLedger.length > 0) {
         setCashLedger(result.cashLedger);
       }
-      // Comprehensive cash balance calculation:
-      //   Cash = NetLedger + RealizedP&L + Dividends + Interest + OpenPositionCosts
-      //
-      // Cash Ledger: include all types EXCEPT "FX Conversion" (which is a zero-sum currency swap).
-      //   NOTE: "Transfer" IS included — inter-account ACATS transfers appear as "Withdrawal" in IB
-      //   and "Transfer" in IB AUS; excluding Transfer would cause a large negative bias.
-      //
-      // All amounts converted to USD using current exchange rates.
-      {
-        const mc = marketConstants;
-        const toUsdByCurrency = (amount: number, currency: string) => {
-          const c = (currency || 'USD').toUpperCase();
-          if (c === 'HKD') return amount / mc.exg_rate;
-          if (c === 'AUD') return amount / mc.aud_exg;
-          if (c === 'SGD') return amount / mc.sg_exg;
-          return amount;
-        };
-        const toUsdByMarket = (amount: number, market: string) => {
-          const m = (market || '').toUpperCase().trim();
-          if (m === 'HK') return amount / mc.exg_rate;
-          if (m === 'AUS') return amount / mc.aud_exg;
-          if (m === 'SG') return amount / mc.sg_exg;
-          return amount;
-        };
-
-        // Use fresh result data; fall back to current state if file had no data for that sheet
-        const ledger   = result.cashLedger.length > 0  ? result.cashLedger  : cashLedger;
-        const pnl      = result.pnl.length > 0          ? result.pnl         : pnlData;
-        const divs     = result.dividends.length > 0    ? result.dividends   : dividendData;
-        const ints     = result.interest.length > 0     ? result.interest    : interestData;
-        const txns     = enrichTransactions(result.transactions, result.lookup);
-        const optTxns  = result.optionTransactions;
-
-        // 1. External cash flows (exclude FX Conversion — just a currency swap, should net to 0)
-        const EXCLUDED_LEDGER_TYPES = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
-        const netLedger = ledger
-          .filter(e => !EXCLUDED_LEDGER_TYPES.has(e.type.toLowerCase().replace(/[-\s]+/g, '')))
-          .reduce((s, e) => s + toUsdByCurrency(e.amount, e.currency), 0);
-
-        // 2. Realized P&L from closed trades (native currency per market)
-        const realizedPnl = pnl.reduce((s, p) => s + toUsdByMarket(p.realizedPnL, p.market || ''), 0);
-
-        // 3. Dividends received
-        const dividends = divs.reduce((s, d) => s + toUsdByCurrency(d.netAmount, d.currency), 0);
-
-        // 4. Interest received
-        const interest = ints.reduce((s, d) => s + toUsdByCurrency(d.amount, d.currency), 0);
-
-        // 5. Cost of open stock positions (total is negative for buys)
-        const openStockCost = txns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
-
-        // 6. Cost of open option positions
-        const openOptionCost = optTxns.reduce((s, t) => s + toUsdByMarket(t.total, t.market), 0);
-
-        const newCash = netLedger + realizedPnl + dividends + interest + openStockCost + openOptionCost;
-        setCashPosition(parseFloat(newCash.toFixed(2)));
+      const nextAutoCash = calculateAutoCashPosition(
+        nextTransactions,
+        nextOptionTransactions,
+        nextPnlData,
+        nextDividends,
+        nextInterest,
+        nextCashLedger,
+        marketConstants,
+      );
+      setCashPosition(nextAutoCash);
+      if (result.portfolioCashPosition !== undefined) {
+        const cashAdjustmentFromFile = parseFloat((result.portfolioCashPosition - nextAutoCash).toFixed(2));
+        setCashAdjustment(cashAdjustmentFromFile);
+        showToast(`Loaded cash position from Portfolio Summary: $${result.portfolioCashPosition.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, 'success');
       }
       setIsUploading(false);
       if (result.warnings.length > 0) {
@@ -332,6 +335,7 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
+      applyReportDate(result.reportDate);
 
       // 1. Merge Lookup Data
       setLookupData(prev => {
@@ -480,6 +484,7 @@ const App: React.FC = () => {
   const handleIncomeUpload = useCallback(async (file: File) => {
     try {
       const result = await parseExcelFile(file);
+      applyReportDate(result.reportDate);
       if (result.dividends.length > 0) {
         setDividendData(prev => {
           const existing = new Set(prev.map(d => `${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
@@ -510,7 +515,7 @@ const App: React.FC = () => {
     } catch (e) {
       showToast('Error reading income file: ' + (e as Error).message, 'error');
     }
-  }, [showToast]);
+  }, [applyReportDate, showToast]);
 
   const handleBenchmarkUpload = useCallback(async (file: File) => {
     try {
@@ -699,6 +704,7 @@ const App: React.FC = () => {
   const handleSingleUpload = async (section: string, file: File) => {
     try {
         const result = await parseExcelFile(file);
+        applyReportDate(result.reportDate);
         if (section === 'lookup') setLookupData(result.lookup);
         else if (section === 'transaction') {
             setTransactions(enrichTransactions(result.transactions, lookupData));
