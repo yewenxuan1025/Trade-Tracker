@@ -141,9 +141,10 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { date: new Date().toISOString().split('T')[0], exg_rate: 7.8, aud_exg: 1.5, sg_exg: 1.3 };
   });
 
-  const applyReportDate = useCallback((reportDate?: string) => {
-    if (!reportDate) return;
-    setMarketConstants(prev => prev.date === reportDate ? prev : { ...prev, date: reportDate });
+  const applyUploadedDate = useCallback((reportDate?: string, lookupDate?: string) => {
+    const uploadedDate = reportDate || lookupDate;
+    if (!uploadedDate) return;
+    setMarketConstants(prev => prev.date === uploadedDate ? prev : { ...prev, date: uploadedDate });
   }, []);
 
   // Auto-calculated cash position (from ledger + PnL + transactions)
@@ -270,7 +271,7 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
-      applyReportDate(result.reportDate);
+      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
       if (lookupData) {
           const oldMap = new Map<string, StockData>();
           lookupData.stocks.forEach(s => oldMap.set(s.ticker.toUpperCase(), s));
@@ -335,7 +336,7 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
-      applyReportDate(result.reportDate);
+      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
 
       // 1. Merge Lookup Data
       setLookupData(prev => {
@@ -484,7 +485,7 @@ const App: React.FC = () => {
   const handleIncomeUpload = useCallback(async (file: File) => {
     try {
       const result = await parseExcelFile(file);
-      applyReportDate(result.reportDate);
+      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
       if (result.dividends.length > 0) {
         setDividendData(prev => {
           const existing = new Set(prev.map(d => `${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
@@ -515,7 +516,7 @@ const App: React.FC = () => {
     } catch (e) {
       showToast('Error reading income file: ' + (e as Error).message, 'error');
     }
-  }, [applyReportDate, showToast]);
+  }, [applyUploadedDate, showToast]);
 
   const handleBenchmarkUpload = useCallback(async (file: File) => {
     try {
@@ -704,7 +705,7 @@ const App: React.FC = () => {
   const handleSingleUpload = async (section: string, file: File) => {
     try {
         const result = await parseExcelFile(file);
-        applyReportDate(result.reportDate);
+        applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
         if (section === 'lookup') setLookupData(result.lookup);
         else if (section === 'transaction') {
             setTransactions(enrichTransactions(result.transactions, lookupData));

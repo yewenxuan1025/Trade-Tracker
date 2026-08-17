@@ -33,6 +33,61 @@ const initialFilters: FilterState = {
   minDays: '', maxDays: '', minPnL: '', maxPnL: '', minPct: '', maxPct: ''
 };
 
+type DisplayPnLData = PnLData & {
+  displayOpenDate: string;
+  displayCloseDate: string;
+  displayHoldingDays: number;
+};
+
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+const getDaysBetween = (openDate: string, closeDate: string): number => {
+  const openTime = new Date(openDate).getTime();
+  const closeTime = new Date(closeDate).getTime();
+  if (Number.isNaN(openTime) || Number.isNaN(closeTime)) return 0;
+  return Math.max(0, Math.ceil((closeTime - openTime) / MS_PER_DAY));
+};
+
+const getChronologicalDates = (firstDate: string, secondDate: string) => {
+  if (!firstDate) return { openDate: secondDate || '', closeDate: secondDate || '' };
+  if (!secondDate) return { openDate: firstDate, closeDate: firstDate };
+  return firstDate <= secondDate
+    ? { openDate: firstDate, closeDate: secondDate }
+    : { openDate: secondDate, closeDate: firstDate };
+};
+
+const getDisplayDates = (record: PnLData): Pick<DisplayPnLData, 'displayOpenDate' | 'displayCloseDate' | 'displayHoldingDays'> => {
+  const isOption = !!record.option && ['Call', 'Put'].includes(record.option);
+  let openDate = record.buyDate || '';
+  let closeDate = record.sellDate || '';
+
+  if (isOption) {
+    const action = (record.optionAction || '').trim().toLowerCase();
+    if (action === 'buy to cover' || action === 'assignment') {
+      openDate = record.sellDate || '';
+      closeDate = record.buyDate || '';
+    } else if (action === 'expire') {
+      openDate = record.sellDate || '';
+      closeDate = record.expiration || record.buyDate || '';
+    } else if (action === 'close position') {
+      openDate = record.buyDate || '';
+      closeDate = record.sellDate || '';
+    } else {
+      ({ openDate, closeDate } = getChronologicalDates(record.buyDate || '', record.sellDate || ''));
+    }
+
+    if (openDate && closeDate && closeDate < openDate) {
+      ({ openDate, closeDate } = getChronologicalDates(openDate, closeDate));
+    }
+  }
+
+  return {
+    displayOpenDate: openDate,
+    displayCloseDate: closeDate,
+    displayHoldingDays: getDaysBetween(openDate, closeDate),
+  };
+};
+
 const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, onUpload, onExport, onEditRecord, onDeleteRecord }) => {
   const [targetStartDate, setTargetStartDate] = useState('2024-04-23');
   const [targetEndDate, setTargetEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -55,13 +110,14 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
 
   // Separate State for Stock and Option tables
   const [confirmState, setConfirmState] = useState<{ message: string; onConfirm: () => void } | null>(null);
-  const [stockSortConfig, setStockSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
-  const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof PnLData; direction: 'asc' | 'desc' } | null>(null);
+  const [stockSortConfig, setStockSortConfig] = useState<{ key: keyof DisplayPnLData; direction: 'asc' | 'desc' } | null>(null);
+  const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof DisplayPnLData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [selectedOptionIds, setSelectedOptionIds] = useState<Set<string>>(new Set());
 
   const [colWidths, setColWidths] = useState<Record<string, number>>({ 
-    tradeNumber: 50, stock: 95, name: 160, market: 65, account: 90, quantity: 85, buyDate: 100, sellDate: 100, holdingDays: 65, 
+    tradeNumber: 50, stock: 95, name: 160, market: 65, account: 90, quantity: 85, buyDate: 100, sellDate: 100, holdingDays: 65,
+    displayOpenDate: 100, displayCloseDate: 100, displayHoldingDays: 65,
     buyPrice: 90, buyComm: 90, sellPrice: 90, sellComm: 90, totalBuy: 115, totalSell: 115, realizedPnL: 110, returnPercent: 95,
     tgtProfitCost: 110, tgtProfitSales: 110, tgtLossCost: 110, tgtLossSales: 110, option: 80, strike: 80, expiration: 100, optionAction: 120
   });
@@ -76,13 +132,17 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
 
   const { stockPnl, optionPnl, aggregatedSummary } = useMemo(() => {
     const lookupMap = new Map<string, string>((lookupData?.stocks || []).map(s => [s.ticker.toUpperCase(), s.companyName]));
-    const enrich = (r: PnLData): PnLData => ({ ...r, name: lookupMap.get((r.stock || '').toUpperCase()) || '' });
+    const enrich = (r: PnLData): DisplayPnLData => ({
+      ...r,
+      name: lookupMap.get((r.stock || '').toUpperCase()) || '',
+      ...getDisplayDates(r),
+    });
     const stocks = data.filter(r => !r.option || !['Call', 'Put'].includes(r.option)).map(enrich);
     const options = data.filter(r => r.option && ['Call', 'Put'].includes(r.option)).map(enrich);
     
     // Aggregated Summary Calculation (converted to USD)
     const all = [...stocks, ...options];
-    const inRange = all.filter(r => r.sellDate >= targetStartDate && r.sellDate <= targetEndDate);
+    const inRange = all.filter(r => r.displayCloseDate >= targetStartDate && r.displayCloseDate <= targetEndDate);
     
     // Target Winners
     const winners = inRange.filter(r => r.returnPercent >= targetProfitPct);
@@ -118,18 +178,18 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
     };
   }, [data, lookupData, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, marketConstants]);
 
-  const processData = (rawData: PnLData[], config: typeof stockSortConfig, filters: FilterState) => {
+  const processData = (rawData: DisplayPnLData[], config: typeof stockSortConfig, filters: FilterState) => {
       // 1. Filter by Specific Columns (Local Filters)
       let filtered = rawData;
 
       if (filters.stock) filtered = filtered.filter(r => (r.stock || '').toLowerCase().includes(filters.stock.toLowerCase()));
       if (filters.name) filtered = filtered.filter(r => (r.name || '').toLowerCase().includes(filters.name.toLowerCase()));
       if (filters.market) filtered = filtered.filter(r => (r.market || '').toLowerCase().includes(filters.market.toLowerCase()));
-      if (filters.buyDate) filtered = filtered.filter(r => (r.buyDate || '').includes(filters.buyDate));
-      if (filters.sellDate) filtered = filtered.filter(r => (r.sellDate || '').includes(filters.sellDate));
+      if (filters.buyDate) filtered = filtered.filter(r => (r.displayOpenDate || '').includes(filters.buyDate));
+      if (filters.sellDate) filtered = filtered.filter(r => (r.displayCloseDate || '').includes(filters.sellDate));
       
-      if (filters.minDays) filtered = filtered.filter(r => (r.holdingDays || 0) >= parseFloat(filters.minDays));
-      if (filters.maxDays) filtered = filtered.filter(r => (r.holdingDays || 0) <= parseFloat(filters.maxDays));
+      if (filters.minDays) filtered = filtered.filter(r => (r.displayHoldingDays || 0) >= parseFloat(filters.minDays));
+      if (filters.maxDays) filtered = filtered.filter(r => (r.displayHoldingDays || 0) <= parseFloat(filters.maxDays));
       
       if (filters.minPnL) filtered = filtered.filter(r => r.realizedPnL >= parseFloat(filters.minPnL));
       if (filters.maxPnL) filtered = filtered.filter(r => r.realizedPnL <= parseFloat(filters.maxPnL));
@@ -212,7 +272,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
     <th className={`px-3 py-3 text-[10px] font-bold text-slate-500 uppercase border-b border-slate-200 relative bg-slate-50 sticky top-0 z-20 ${stickyLeft ? 'left-0 !z-40 border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]' : ''}`} style={{ width: colWidths[field], minWidth: colWidths[field], left: stickyLeft ? leftOffset : 'auto' }}>
         <div className="flex items-center cursor-pointer hover:bg-slate-200/50 p-1 rounded" onClick={() => {
             const dir = sortConfig?.key === field && sortConfig.direction === 'asc' ? 'desc' : 'asc';
-            setSortConfig({ key: field as keyof PnLData, direction: dir as 'asc' | 'desc' });
+            setSortConfig({ key: field as keyof DisplayPnLData, direction: dir as 'asc' | 'desc' });
         }}>
           <span className="truncate">{label}</span>
           {sortConfig?.key === field && (sortConfig.direction === 'asc' ? <ArrowUp size={10} className="ml-1"/> : <ArrowDown size={10} className="ml-1"/>)}
@@ -235,11 +295,25 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       const realizedPnL = totalBuy + totalSell;
       const returnPercent = totalBuy !== 0 ? (realizedPnL / Math.abs(totalBuy)) * 100 : 0;
       
-      const updated = { ...editingRecord, totalBuy, totalSell, realizedPnL, returnPercent };
+      const updatedBase = { ...editingRecord, totalBuy, totalSell, realizedPnL, returnPercent };
+      const displayDates = getDisplayDates(updatedBase);
+      const closeDate = displayDates.displayCloseDate;
+      const closeYear = closeDate ? new Date(closeDate).getFullYear() : undefined;
+      const closeMonth = closeDate ? new Date(closeDate).getMonth() + 1 : undefined;
+      const updated = { ...updatedBase, holdingDays: displayDates.displayHoldingDays, year: closeYear, month: closeMonth };
       onEditRecord(editingRecord.id, updated);
       setIsEditModalOpen(false);
       setEditingRecord(null);
   };
+
+  const openEditRecord = (id: string) => {
+      const rec = data.find(p => p.id === id);
+      if (!rec) return;
+      setEditingRecord(rec);
+      setIsEditModalOpen(true);
+  };
+
+  const stripDisplayFields = ({ displayOpenDate, displayCloseDate, displayHoldingDays, ...record }: DisplayPnLData) => record;
 
   const renderTable = (title: string, tableData: any[], selectedIds: Set<string>, setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>, sortConfig: any, setSortConfig: any, isOption = false, page: number, setPage: (p: number) => void, showFilters: boolean, setShowFilters: (s: boolean) => void, filters: FilterState, setFilters: (f: FilterState) => void) => {
     const totalPages = Math.ceil(tableData.length / itemsPerPage);
@@ -257,7 +331,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                   </button>
                   {selectedIds.size > 0 && (
                       <div className="flex items-center gap-2">
-                         {selectedIds.size === 1 && <button onClick={() => { const rec = data.find(p => p.id === Array.from(selectedIds)[0]); if(rec) { setEditingRecord(rec); setIsEditModalOpen(true); } }} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200"><Pencil size={14}/></button>}
+                         {selectedIds.size === 1 && <button onClick={() => openEditRecord(Array.from(selectedIds)[0])} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors border border-blue-200" title="Edit record"><Pencil size={14}/></button>}
                          <button onClick={() => { setConfirmState({ message: `Delete ${selectedIds.size} record${selectedIds.size > 1 ? 's' : ''}?`, onConfirm: () => { onDeleteRecord(Array.from(selectedIds)); setSelectedIds(new Set()); setConfirmState(null); } }); }} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200"><Trash2 size={14}/></button>
                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{selectedIds.size} Selected</span>
                       </div>
@@ -319,9 +393,9 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
         <table className="w-full text-left border-collapse table-fixed">
           <thead className="bg-slate-50 shadow-sm">
             <tr>
-              <th className="px-3 py-3 border-b border-slate-200 w-10 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIds.size === tableData.length && tableData.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(tableData.map((p: any) => p.id)) : new Set())}/></th>
-              <HeaderCell label="No." field="tradeNumber" sortConfig={sortConfig} setSortConfig={setSortConfig} stickyLeft leftOffset={40} />
-              <HeaderCell label="Stock" field="stock" sortConfig={sortConfig} setSortConfig={setSortConfig} stickyLeft leftOffset={90} />
+              <th className="px-2 py-3 border-b border-slate-200 w-16 sticky left-0 top-0 bg-slate-50 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><input type="checkbox" checked={selectedIds.size === tableData.length && tableData.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(tableData.map((p: any) => p.id)) : new Set())}/></th>
+              <HeaderCell label="No." field="tradeNumber" sortConfig={sortConfig} setSortConfig={setSortConfig} stickyLeft leftOffset={64} />
+              <HeaderCell label="Stock" field="stock" sortConfig={sortConfig} setSortConfig={setSortConfig} stickyLeft leftOffset={114} />
               {isOption && <HeaderCell label="Option" field="option" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Strike" field="strike" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               {isOption && <HeaderCell label="Exp" field="expiration" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
@@ -329,9 +403,9 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
               <HeaderCell label="Name" field="name" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Mkt" field="market" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Qty" field="quantity" sortConfig={sortConfig} setSortConfig={setSortConfig} />
-              <HeaderCell label="Open" field="buyDate" sortConfig={sortConfig} setSortConfig={setSortConfig} />
-              <HeaderCell label="Close" field="sellDate" sortConfig={sortConfig} setSortConfig={setSortConfig} />
-              <HeaderCell label="Days" field="holdingDays" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              <HeaderCell label="Open" field="displayOpenDate" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              <HeaderCell label="Close" field="displayCloseDate" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              <HeaderCell label="Days" field="displayHoldingDays" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Buy Prc" field="buyPrice" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Buy Comm" field="buyComm" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Sell Prc" field="sellPrice" sortConfig={sortConfig} setSortConfig={setSortConfig} />
@@ -349,9 +423,16 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
           <tbody className="divide-y divide-slate-100">
             {paginatedData.map((r) => (
               <tr key={r.id} className={`group cursor-pointer transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}>
-                <td className={`px-3 py-2 sticky left-0 z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}/></td>
-                <td className={`px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[40px] z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.tradeNumber}</td>
-                <td className={`px-3 py-2 font-extrabold text-blue-600 sticky left-[90px] z-10 border-r text-xs ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.stock}</td>
+                <td className={`px-2 py-2 sticky left-0 z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-center gap-1">
+                    <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}/>
+                    <button onClick={() => openEditRecord(r.id)} className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit record">
+                      <Pencil size={12} />
+                    </button>
+                  </div>
+                </td>
+                <td className={`px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[64px] z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.tradeNumber}</td>
+                <td className={`px-3 py-2 font-extrabold text-blue-600 sticky left-[114px] z-10 border-r text-xs ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.stock}</td>
                 {isOption && <td className="px-3 py-2 text-[10px] text-purple-600 font-bold">{r.option}</td>}
                 {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-600">{r.strike}</td>}
                 {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.expiration}</td>}
@@ -359,9 +440,9 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                 <td className="px-3 py-2 text-[10px] text-slate-600 truncate">{r.name}</td>
                 <td className="px-3 py-2 text-[10px] text-slate-400">{r.market}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs">{r.quantity.toLocaleString()}</td>
-                <td className="px-3 py-2 text-[10px] text-slate-500">{r.buyDate}</td>
-                <td className="px-3 py-2 text-[10px] text-slate-500">{r.sellDate}</td>
-                <td className="px-3 py-2 text-center text-[10px] text-slate-500 font-bold">{r.holdingDays}</td>
+                <td className="px-3 py-2 text-[10px] text-slate-500">{r.displayOpenDate}</td>
+                <td className="px-3 py-2 text-[10px] text-slate-500">{r.displayCloseDate}</td>
+                <td className="px-3 py-2 text-center text-[10px] text-slate-500 font-bold">{r.displayHoldingDays}</td>
                 <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-400">{formatNumber(r.buyPrice)}</td>
                 <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-300">{formatNumber(r.buyComm)}</td>
                 <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-400">{formatNumber(r.sellPrice)}</td>
@@ -407,7 +488,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                     <Upload size={14} />Upload
                     <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); }} />
                 </label>
-                <button onClick={() => onExport([...processedStocks, ...processedOptions])} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Download size={14} />Export</button>
+                <button onClick={() => onExport([...processedStocks, ...processedOptions].map(stripDisplayFields))} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Download size={14} />Export</button>
             </div>
         </div>
         
@@ -477,6 +558,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Option Type</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.option} onChange={e => setEditingRecord({...editingRecord!, option: e.target.value})}><option value="Call">Call</option><option value="Put">Put</option></select></div>
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Strike</label><input type="number" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.strike} onChange={e => setEditingRecord({...editingRecord!, strike: parseFloat(e.target.value)})}/></div>
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Expiration</label><input type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.expiration} onChange={e => setEditingRecord({...editingRecord!, expiration: e.target.value})}/></div>
+                         <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Action</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.optionAction || ''} onChange={e => setEditingRecord({...editingRecord!, optionAction: e.target.value || undefined})}><option value="">None</option><option value="Buy to Cover">Buy to Cover</option><option value="Close Position">Close Position</option><option value="Assignment">Assignment</option><option value="Expire">Expire</option></select></div>
                         </>
                     )}
 

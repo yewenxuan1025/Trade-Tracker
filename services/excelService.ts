@@ -399,8 +399,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
               // Try to detect the lookup date from pre-header rows (e.g. a cell labelled "Date" or "Lookup Date")
               if (!lookupDate) {
                 for (let ci = 0; ci < row.length - 1; ci++) {
-                  const label = String(row[ci] || '').trim().toLowerCase();
-                  if (label === 'date' || label === 'lookup date' || label === 'data date' || label === 'as of') {
+                  const label = normalizeWorkbookLabel(row[ci]);
+                  if (['date', 'lookup date', 'data date', 'as of', 'date current', 'data current'].includes(label)) {
                     const dateVal = row[ci + 1];
                     if (dateVal) lookupDate = parseExcelDate(dateVal);
                   }
