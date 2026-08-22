@@ -47,15 +47,61 @@ const parseNumeric = (val: any, precision?: number): number => {
 /**
  * Helper to parse Excel dates
  */
+const formatDateParts = (year: number, month: number, day: number): string => {
+  if (!year || year < 1900 || year > 2999 || !month || !day || month < 1 || month > 12 || day < 1 || day > 31) return '';
+  const candidate = new Date(year, month - 1, day);
+  if (
+    candidate.getFullYear() !== year ||
+    candidate.getMonth() !== month - 1 ||
+    candidate.getDate() !== day
+  ) {
+    return '';
+  }
+  return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+};
+
+const normalizeDateString = (value: string): string => {
+  const raw = value.trim();
+  if (!raw) return '';
+
+  const yearFirst = raw.match(/(\d{4})[\-/.\s年](\d{1,2})[\-/.\s月](\d{1,2})/);
+  if (yearFirst) {
+    return formatDateParts(Number(yearFirst[1]), Number(yearFirst[2]), Number(yearFirst[3]));
+  }
+
+  const compact = raw.match(/\b(\d{4})(\d{2})(\d{2})\b/);
+  if (compact) {
+    return formatDateParts(Number(compact[1]), Number(compact[2]), Number(compact[3]));
+  }
+
+  const monthOrDayFirst = raw.match(/\b(\d{1,2})[\-/.](\d{1,2})[\-/.](\d{2,4})\b/);
+  if (monthOrDayFirst) {
+    const first = Number(monthOrDayFirst[1]);
+    const second = Number(monthOrDayFirst[2]);
+    const year = Number(monthOrDayFirst[3].length === 2 ? `20${monthOrDayFirst[3]}` : monthOrDayFirst[3]);
+    const month = first > 12 ? second : first;
+    const day = first > 12 ? first : second;
+    return formatDateParts(year, month, day);
+  }
+
+  return raw;
+};
+
 const parseExcelDate = (val: any): string => {
   if (!val) return '';
-  if (val instanceof Date) return val.toISOString().split('T')[0];
-  if (typeof val === 'string') return val;
+  if (val instanceof Date) return formatDateParts(val.getFullYear(), val.getMonth() + 1, val.getDate());
+  if (typeof val === 'string') return normalizeDateString(val);
   if (typeof val === 'number') {
-    const date = new Date((val - 25569) * 86400 * 1000);
-    return date.toISOString().split('T')[0]; 
+    const numericText = String(Math.trunc(val));
+    if (/^[12]\d{7}$/.test(numericText)) {
+      const compactDate = normalizeDateString(numericText);
+      if (compactDate) return compactDate;
+    }
+
+    const parsed = XLSX.SSF.parse_date_code(val);
+    return parsed ? formatDateParts(parsed.y, parsed.m, parsed.d) : '';
   }
-  return String(val);
+  return normalizeDateString(String(val));
 };
 
 const NUMERIC_KEYS: (keyof StockData)[] = ['marketCap', 'closePrice', 'peTTM', 'pb', 'dividendYield', 'roeTTM', 'psQuantile'];
@@ -134,6 +180,14 @@ const PNL_EXPORT_MAP: Record<string, string> = {
     sellComm: 'Sell Comm',
     totalSell: 'Total Sales',
     realizedPnL: 'Realized P&L',
+    premiumPnl: 'Premium P&L',
+    assignmentDate: 'Assignment Date',
+    assignmentClosePrice: 'Assignment Close Price',
+    assignedShares: 'Assigned Shares',
+    assignmentImpact: 'Assignment Impact',
+    optionEconomicPnL: 'Option Economic P&L',
+    optionEconomicReturnPercent: 'Option Economic Return %',
+    assignmentPriceStatus: 'Assignment Price Status',
     returnPercent: 'Return %',
     holdingDays: 'Holding Days',
     year: 'Year',
@@ -190,6 +244,20 @@ const normalizeWorkbookLabel = (val: any): string =>
 
 const hasCellValue = (val: any): boolean =>
   val !== null && val !== undefined && String(val).trim() !== '';
+
+const LOOKUP_DATE_LABELS = new Set(['date', 'lookup date', 'data date', 'as of', 'date current', 'data current']);
+
+const parseInlineLookupDate = (val: any): string | undefined => {
+  const text = String(val ?? '').trim();
+  if (!text) return undefined;
+
+  const normalized = normalizeWorkbookLabel(text);
+  const hasDateLabel = Array.from(LOOKUP_DATE_LABELS).some(label => normalized.startsWith(label));
+  if (!hasDateLabel) return undefined;
+
+  const parsed = parseExcelDate(text);
+  return parsed && parsed !== text ? parsed : undefined;
+};
 
 const parsePortfolioCashPosition = (workbook: XLSX.WorkBook): number | undefined => {
   const sheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'portfolio summary');
@@ -398,9 +466,15 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
               const row = jsonData[i];
               // Try to detect the lookup date from pre-header rows (e.g. a cell labelled "Date" or "Lookup Date")
               if (!lookupDate) {
-                for (let ci = 0; ci < row.length - 1; ci++) {
+                for (let ci = 0; ci < row.length; ci++) {
+                  const inlineDate = parseInlineLookupDate(row[ci]);
+                  if (inlineDate) {
+                    lookupDate = inlineDate;
+                    break;
+                  }
+
                   const label = normalizeWorkbookLabel(row[ci]);
-                  if (['date', 'lookup date', 'data date', 'as of', 'date current', 'data current'].includes(label)) {
+                  if (LOOKUP_DATE_LABELS.has(label) && ci < row.length - 1) {
                     const dateVal = row[ci + 1];
                     if (dateVal) lookupDate = parseExcelDate(dateVal);
                   }
@@ -625,6 +699,14 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     sellComm: parseNumeric(row['Sell Comm']),
                     totalSell: parseNumeric(row['Total Sales']),
                     realizedPnL: parseNumeric(row['Realized P&L']),
+                    premiumPnl: hasCellValue(row['Premium P&L']) ? parseNumeric(row['Premium P&L']) : undefined,
+                    assignmentDate: hasCellValue(row['Assignment Date']) ? parseExcelDate(row['Assignment Date']) : undefined,
+                    assignmentClosePrice: hasCellValue(row['Assignment Close Price']) ? parseNumeric(row['Assignment Close Price']) : undefined,
+                    assignedShares: hasCellValue(row['Assigned Shares']) ? parseNumeric(row['Assigned Shares']) : undefined,
+                    assignmentImpact: hasCellValue(row['Assignment Impact']) ? parseNumeric(row['Assignment Impact']) : undefined,
+                    optionEconomicPnL: hasCellValue(row['Option Economic P&L']) ? parseNumeric(row['Option Economic P&L']) : undefined,
+                    optionEconomicReturnPercent: hasCellValue(row['Option Economic Return %']) ? parseNumeric(row['Option Economic Return %']) : undefined,
+                    assignmentPriceStatus: hasCellValue(row['Assignment Price Status']) ? row['Assignment Price Status'] : undefined,
                     returnPercent: parseNumeric(row['Return %']),
                     holdingDays: parseNumeric(row['Holding Days']),
                     year: parseNumeric(row['Year']),
@@ -828,12 +910,30 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
   });
 };
 
-export const exportToExcel = (stocks: StockData[], fileName: string = 'LookupData.xlsx') => {
+export const exportToExcel = (
+  stocks: StockData[],
+  marketConstantsOrFileName?: MarketConstants | string,
+  fileName: string = 'LookupData.xlsx',
+) => {
+  const marketConstants = typeof marketConstantsOrFileName === 'string' ? undefined : marketConstantsOrFileName;
+  const outputFileName = typeof marketConstantsOrFileName === 'string' ? marketConstantsOrFileName : fileName;
+  const workbook = XLSX.utils.book_new();
+  if (marketConstants) {
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.json_to_sheet([
+        { Metric: 'Report Date', Value: marketConstants.date },
+        { Metric: 'HKD Exg Rate', Value: marketConstants.exg_rate },
+        { Metric: 'AUD Exg Rate', Value: marketConstants.aud_exg },
+        { Metric: 'SGD Exg Rate', Value: marketConstants.sg_exg },
+      ]),
+      "Report Info",
+    );
+  }
   const worksheet = XLSX.utils.json_to_sheet(stocks);
   formatWorksheet(worksheet, stocks);
-  const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Lookup");
-  XLSX.writeFile(workbook, fileName);
+  XLSX.writeFile(workbook, outputFileName);
 };
 
 export const exportTransactionsToExcel = (transactions: TransactionData[], optionTransactions: TransactionData[], fileName: string = 'Transactions.xlsx') => {
@@ -866,14 +966,16 @@ export const exportPnLToExcel = (pnlData: PnLData[], marketConstants?: MarketCon
     });
 
     if (stockPnl.length > 0) {
-        const wsStock = XLSX.utils.json_to_sheet(processPnl(stockPnl));
-        formatWorksheet(wsStock, stockPnl);
+        const mappedStock = mapToExport(processPnl(stockPnl), PNL_EXPORT_MAP);
+        const wsStock = XLSX.utils.json_to_sheet(mappedStock);
+        formatWorksheet(wsStock, mappedStock);
         XLSX.utils.book_append_sheet(workbook, wsStock, "Stock Realized P&L");
     }
 
     if (optionPnl.length > 0) {
-        const wsOption = XLSX.utils.json_to_sheet(processPnl(optionPnl));
-        formatWorksheet(wsOption, optionPnl);
+        const mappedOption = mapToExport(processPnl(optionPnl), PNL_EXPORT_MAP);
+        const wsOption = XLSX.utils.json_to_sheet(mappedOption);
+        formatWorksheet(wsOption, mappedOption);
         XLSX.utils.book_append_sheet(workbook, wsOption, "Option Realized P&L");
     }
 

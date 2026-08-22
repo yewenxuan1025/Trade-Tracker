@@ -77,6 +77,14 @@ export interface PnLData {
   expiration?: string;
   strike?: number;
   optionAction?: string; // 'Buy to Cover' | 'Close Position' | 'Assignment' | 'Expire'
+  premiumPnl?: number; // Option premium/cash P&L before assignment impact
+  assignmentDate?: string;
+  assignmentClosePrice?: number;
+  assignedShares?: number;
+  assignmentImpact?: number;
+  optionEconomicPnL?: number;
+  optionEconomicReturnPercent?: number;
+  assignmentPriceStatus?: 'Lookup Data' | 'Manual' | 'Pending' | 'Not Required';
 
   // Target Metrics (Calculated)
   tgtProfitCost?: number;
@@ -239,6 +247,14 @@ export const PNL_HEADER_MAP: Record<string, string> = {
   'Sell Comm': 'sellComm',
   'Total Cost': 'totalBuy',
   'Total Sales': 'totalSell',
+  'Premium P&L': 'premiumPnl',
+  'Assignment Date': 'assignmentDate',
+  'Assignment Close Price': 'assignmentClosePrice',
+  'Assigned Shares': 'assignedShares',
+  'Assignment Impact': 'assignmentImpact',
+  'Option Economic P&L': 'optionEconomicPnL',
+  'Option Economic Return %': 'optionEconomicReturnPercent',
+  'Assignment Price Status': 'assignmentPriceStatus',
   'Strike': 'strike',
   'Expiration': 'expiration'
 };

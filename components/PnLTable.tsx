@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PnLData, MarketConstants, LookupSheetData } from '../types';
+import { buildOptionPnlFields, getOptionOpeningAmount, getOptionPnlValue, getOptionReturnPercentValue, isAssignmentOptionRecord, isOptionPnlRecord } from '../services/optionPnl';
 import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -12,6 +13,8 @@ interface PnLTableProps {
   onExport: (filteredData: PnLData[]) => void;
   onEditRecord: (id: string, updated: Partial<PnLData>) => void;
   onDeleteRecord: (id: string | string[]) => void;
+  autoEditRecordId?: string | null;
+  onAutoEditConsumed?: () => void;
 }
 
 interface FilterState {
@@ -37,6 +40,8 @@ type DisplayPnLData = PnLData & {
   displayOpenDate: string;
   displayCloseDate: string;
   displayHoldingDays: number;
+  displayPnl?: number;
+  displayReturnPercent?: number;
 };
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -88,7 +93,7 @@ const getDisplayDates = (record: PnLData): Pick<DisplayPnLData, 'displayOpenDate
   };
 };
 
-const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, onUpload, onExport, onEditRecord, onDeleteRecord }) => {
+const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, onUpload, onExport, onEditRecord, onDeleteRecord, autoEditRecordId, onAutoEditConsumed }) => {
   const [targetStartDate, setTargetStartDate] = useState('2024-04-23');
   const [targetEndDate, setTargetEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [targetProfitPct, setTargetProfitPct] = useState(25);
@@ -115,10 +120,27 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [selectedOptionIds, setSelectedOptionIds] = useState<Set<string>>(new Set());
 
+  const getEditableRecord = (record: PnLData): PnLData => {
+    return isOptionPnlRecord(record)
+      ? { ...record, ...buildOptionPnlFields(record, lookupData) }
+      : record;
+  };
+
+  useEffect(() => {
+      if (!autoEditRecordId) return;
+      const rec = data.find(p => p.id === autoEditRecordId);
+      if (!rec) return;
+      setEditingRecord(getEditableRecord(rec));
+      setIsEditModalOpen(true);
+      onAutoEditConsumed?.();
+  }, [autoEditRecordId, data, lookupData, onAutoEditConsumed]);
+
   const [colWidths, setColWidths] = useState<Record<string, number>>({ 
     tradeNumber: 50, stock: 95, name: 160, market: 65, account: 90, quantity: 85, buyDate: 100, sellDate: 100, holdingDays: 65,
     displayOpenDate: 100, displayCloseDate: 100, displayHoldingDays: 65,
+    displayPnl: 110, displayReturnPercent: 95,
     buyPrice: 90, buyComm: 90, sellPrice: 90, sellComm: 90, totalBuy: 115, totalSell: 115, realizedPnL: 110, returnPercent: 95,
+    premiumPnl: 110, assignmentClosePrice: 110, assignedShares: 105, assignmentImpact: 115, assignmentPriceStatus: 120,
     tgtProfitCost: 110, tgtProfitSales: 110, tgtLossCost: 110, tgtLossSales: 110, option: 80, strike: 80, expiration: 100, optionAction: 120
   });
 
@@ -129,6 +151,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       if (m === 'AUD' || m === 'AUS') return marketConstants?.aud_exg || 1;
       return 1;
   };
+  const getCostBasis = (record: PnLData) =>
+    isOptionPnlRecord(record) ? getOptionOpeningAmount(record) : Math.abs(record.totalBuy || 0);
 
   const { stockPnl, optionPnl, aggregatedSummary } = useMemo(() => {
     const lookupMap = new Map<string, string>((lookupData?.stocks || []).map(s => [s.ticker.toUpperCase(), s.companyName]));
@@ -136,6 +160,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       ...r,
       name: lookupMap.get((r.stock || '').toUpperCase()) || '',
       ...getDisplayDates(r),
+      displayPnl: getOptionPnlValue(r),
+      displayReturnPercent: getOptionReturnPercentValue(r),
     });
     const stocks = data.filter(r => !r.option || !['Call', 'Put'].includes(r.option)).map(enrich);
     const options = data.filter(r => r.option && ['Call', 'Put'].includes(r.option)).map(enrich);
@@ -145,16 +171,16 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
     const inRange = all.filter(r => r.displayCloseDate >= targetStartDate && r.displayCloseDate <= targetEndDate);
     
     // Target Winners
-    const winners = inRange.filter(r => r.returnPercent >= targetProfitPct);
-    const winCost = winners.reduce((sum, r) => sum + (Math.abs(r.totalBuy) / getRate(r.market || '')), 0);
+    const winners = inRange.filter(r => (r.displayReturnPercent ?? Number.NEGATIVE_INFINITY) >= targetProfitPct && r.displayPnl !== undefined);
+    const winCost = winners.reduce((sum, r) => sum + (getCostBasis(r) / getRate(r.market || '')), 0);
     const winSales = winners.reduce((sum, r) => sum + (r.totalSell / getRate(r.market || '')), 0);
-    const winPnl = winners.reduce((sum, r) => sum + (r.realizedPnL / getRate(r.market || '')), 0);
+    const winPnl = winners.reduce((sum, r) => sum + ((r.displayPnl || 0) / getRate(r.market || '')), 0);
     
     // Target Losers
-    const losers = inRange.filter(r => r.returnPercent <= -Math.abs(targetLossPct));
-    const lossCost = losers.reduce((sum, r) => sum + (Math.abs(r.totalBuy) / getRate(r.market || '')), 0);
+    const losers = inRange.filter(r => (r.displayReturnPercent ?? Number.POSITIVE_INFINITY) <= -Math.abs(targetLossPct) && r.displayPnl !== undefined);
+    const lossCost = losers.reduce((sum, r) => sum + (getCostBasis(r) / getRate(r.market || '')), 0);
     const lossSales = losers.reduce((sum, r) => sum + (r.totalSell / getRate(r.market || '')), 0);
-    const lossPnl = losers.reduce((sum, r) => sum + (r.realizedPnL / getRate(r.market || '')), 0);
+    const lossPnl = losers.reduce((sum, r) => sum + ((r.displayPnl || 0) / getRate(r.market || '')), 0);
 
     return { 
         stockPnl: stocks, 
@@ -191,22 +217,22 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       if (filters.minDays) filtered = filtered.filter(r => (r.displayHoldingDays || 0) >= parseFloat(filters.minDays));
       if (filters.maxDays) filtered = filtered.filter(r => (r.displayHoldingDays || 0) <= parseFloat(filters.maxDays));
       
-      if (filters.minPnL) filtered = filtered.filter(r => r.realizedPnL >= parseFloat(filters.minPnL));
-      if (filters.maxPnL) filtered = filtered.filter(r => r.realizedPnL <= parseFloat(filters.maxPnL));
+      if (filters.minPnL) filtered = filtered.filter(r => r.displayPnl !== undefined && r.displayPnl >= parseFloat(filters.minPnL));
+      if (filters.maxPnL) filtered = filtered.filter(r => r.displayPnl !== undefined && r.displayPnl <= parseFloat(filters.maxPnL));
       
-      if (filters.minPct) filtered = filtered.filter(r => r.returnPercent >= parseFloat(filters.minPct));
-      if (filters.maxPct) filtered = filtered.filter(r => r.returnPercent <= parseFloat(filters.maxPct));
+      if (filters.minPct) filtered = filtered.filter(r => r.displayReturnPercent !== undefined && r.displayReturnPercent >= parseFloat(filters.minPct));
+      if (filters.maxPct) filtered = filtered.filter(r => r.displayReturnPercent !== undefined && r.displayReturnPercent <= parseFloat(filters.maxPct));
 
       let res = filtered.map(record => {
         const metrics = { profitCost: 0, profitSales: 0, lossCost: 0, lossSales: 0 };
         const rate = getRate(record.market || '');
         
         // Calculation for target columns (Converted to USD)
-        if (record.returnPercent >= targetProfitPct) {
-            metrics.profitCost = Math.abs(record.totalBuy) / rate;
+        if ((record.displayReturnPercent ?? Number.NEGATIVE_INFINITY) >= targetProfitPct && record.displayPnl !== undefined) {
+            metrics.profitCost = getCostBasis(record) / rate;
             metrics.profitSales = record.totalSell / rate;
-        } else if (record.returnPercent <= -Math.abs(targetLossPct)) {
-            metrics.lossCost = Math.abs(record.totalBuy) / rate;
+        } else if ((record.displayReturnPercent ?? Number.POSITIVE_INFINITY) <= -Math.abs(targetLossPct) && record.displayPnl !== undefined) {
+            metrics.lossCost = getCostBasis(record) / rate;
             metrics.lossSales = record.totalSell / rate;
         }
         
@@ -258,6 +284,15 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
     if (val === undefined || val === null || isNaN(val)) return '0.00';
     return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
+  const formatOptionalNumber = (val: number | undefined) => {
+    if (val === undefined || val === null || isNaN(val)) return '-';
+    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const formatOptionalPercent = (val: number | undefined) => val === undefined || val === null || isNaN(val) ? '-' : `${val.toFixed(2)}%`;
+  const pnlTextClass = (val: number | undefined) => {
+    if (val === undefined || val === null || isNaN(val)) return 'text-amber-500';
+    return val >= 0 ? 'text-red-500' : 'text-emerald-500';
+  };
 
   const formatUsd = (val: number) => `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -296,11 +331,14 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       const returnPercent = totalBuy !== 0 ? (realizedPnL / Math.abs(totalBuy)) * 100 : 0;
       
       const updatedBase = { ...editingRecord, totalBuy, totalSell, realizedPnL, returnPercent };
-      const displayDates = getDisplayDates(updatedBase);
+      const updatedWithOptionFields = isOptionPnlRecord(updatedBase)
+        ? { ...updatedBase, ...buildOptionPnlFields(updatedBase, lookupData) }
+        : updatedBase;
+      const displayDates = getDisplayDates(updatedWithOptionFields);
       const closeDate = displayDates.displayCloseDate;
       const closeYear = closeDate ? new Date(closeDate).getFullYear() : undefined;
       const closeMonth = closeDate ? new Date(closeDate).getMonth() + 1 : undefined;
-      const updated = { ...updatedBase, holdingDays: displayDates.displayHoldingDays, year: closeYear, month: closeMonth };
+      const updated = { ...updatedWithOptionFields, holdingDays: displayDates.displayHoldingDays, year: closeYear, month: closeMonth };
       onEditRecord(editingRecord.id, updated);
       setIsEditModalOpen(false);
       setEditingRecord(null);
@@ -309,11 +347,11 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
   const openEditRecord = (id: string) => {
       const rec = data.find(p => p.id === id);
       if (!rec) return;
-      setEditingRecord(rec);
+      setEditingRecord(getEditableRecord(rec));
       setIsEditModalOpen(true);
   };
 
-  const stripDisplayFields = ({ displayOpenDate, displayCloseDate, displayHoldingDays, ...record }: DisplayPnLData) => record;
+  const stripDisplayFields = ({ displayOpenDate, displayCloseDate, displayHoldingDays, displayPnl, displayReturnPercent, ...record }: DisplayPnLData) => record;
 
   const renderTable = (title: string, tableData: any[], selectedIds: Set<string>, setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>, sortConfig: any, setSortConfig: any, isOption = false, page: number, setPage: (p: number) => void, showFilters: boolean, setShowFilters: (s: boolean) => void, filters: FilterState, setFilters: (f: FilterState) => void) => {
     const totalPages = Math.ceil(tableData.length / itemsPerPage);
@@ -412,8 +450,13 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
               <HeaderCell label="Sell Comm" field="sellComm" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Cost" field="totalBuy" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Sales" field="totalSell" sortConfig={sortConfig} setSortConfig={setSortConfig} />
-              <HeaderCell label="P&L" field="realizedPnL" sortConfig={sortConfig} setSortConfig={setSortConfig} />
-              <HeaderCell label="P&L %" field="returnPercent" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              {isOption && <HeaderCell label="Premium P&L" field="premiumPnl" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {isOption && <HeaderCell label="Assign Close" field="assignmentClosePrice" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {isOption && <HeaderCell label="Assign Shares" field="assignedShares" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {isOption && <HeaderCell label="Assign Impact" field="assignmentImpact" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {isOption && <HeaderCell label="Price Status" field="assignmentPriceStatus" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              <HeaderCell label={isOption ? "Econ P&L" : "P&L"} field="displayPnl" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              <HeaderCell label="P&L %" field="displayReturnPercent" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Tgt Prof Cost" field="tgtProfitCost" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Tgt Prof Sales" field="tgtProfitSales" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Tgt Loss Cost" field="tgtLossCost" sortConfig={sortConfig} setSortConfig={setSortConfig} />
@@ -449,8 +492,13 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                 <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-300">{formatNumber(r.sellComm)}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs text-slate-500 font-bold">{formatNumber(r.totalBuy)}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs text-slate-500 font-bold">{formatNumber(r.totalSell)}</td>
-                <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${r.realizedPnL >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>{formatNumber(r.realizedPnL)}</td>
-                <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${r.returnPercent >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>{r.returnPercent.toFixed(2)}%</td>
+                {isOption && <td className={`px-3 py-2 text-right font-mono text-xs ${pnlTextClass(r.premiumPnl ?? r.realizedPnL)}`}>{formatOptionalNumber(r.premiumPnl ?? r.realizedPnL)}</td>}
+                {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-500">{isAssignmentOptionRecord(r) ? formatOptionalNumber(r.assignmentClosePrice) : '-'}</td>}
+                {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-500">{isAssignmentOptionRecord(r) ? formatOptionalNumber(r.assignedShares) : '-'}</td>}
+                {isOption && <td className={`px-3 py-2 text-right font-mono text-xs ${pnlTextClass(r.assignmentImpact)}`}>{isAssignmentOptionRecord(r) ? formatOptionalNumber(r.assignmentImpact) : '-'}</td>}
+                {isOption && <td className={`px-3 py-2 text-[10px] font-bold whitespace-nowrap ${r.assignmentPriceStatus === 'Pending' ? 'text-amber-500' : 'text-slate-500'}`}>{isAssignmentOptionRecord(r) ? (r.assignmentPriceStatus || '-') : '-'}</td>}
+                <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${pnlTextClass(r.displayPnl)}`}>{r.displayPnl === undefined ? 'Pending' : formatNumber(r.displayPnl)}</td>
+                <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${pnlTextClass(r.displayReturnPercent)}`}>{formatOptionalPercent(r.displayReturnPercent)}</td>
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtProfitCost ? formatNumber(r.tgtProfitCost) : '-'}</td>
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtProfitSales ? formatNumber(r.tgtProfitSales) : '-'}</td>
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtLossCost ? formatNumber(r.tgtLossCost) : '-'}</td>
@@ -559,6 +607,14 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Strike</label><input type="number" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.strike} onChange={e => setEditingRecord({...editingRecord!, strike: parseFloat(e.target.value)})}/></div>
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Expiration</label><input type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.expiration} onChange={e => setEditingRecord({...editingRecord!, expiration: e.target.value})}/></div>
                          <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Action</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.optionAction || ''} onChange={e => setEditingRecord({...editingRecord!, optionAction: e.target.value || undefined})}><option value="">None</option><option value="Buy to Cover">Buy to Cover</option><option value="Close Position">Close Position</option><option value="Assignment">Assignment</option><option value="Expire">Expire</option></select></div>
+                         {isAssignmentOptionRecord(editingRecord) && (
+                            <>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Date</label><input type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentDate || editingRecord.buyDate || ''} onChange={e => setEditingRecord({...editingRecord!, assignmentDate: e.target.value})}/></div>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assigned Shares</label><input type="number" step="1" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignedShares ?? ''} onChange={e => setEditingRecord({...editingRecord!, assignedShares: e.target.value === '' ? undefined : parseFloat(e.target.value) || 0})}/></div>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Close Price</label><input type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentClosePrice ?? ''} onChange={e => setEditingRecord({...editingRecord!, assignmentClosePrice: e.target.value === '' ? undefined : parseFloat(e.target.value) || 0, assignmentPriceStatus: e.target.value === '' ? 'Pending' : 'Manual'})}/></div>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price Status</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentPriceStatus || 'Pending'} onChange={e => setEditingRecord({...editingRecord!, assignmentPriceStatus: e.target.value as PnLData['assignmentPriceStatus']})}><option value="Pending">Pending</option><option value="Manual">Manual</option><option value="Lookup Data">Lookup Data</option></select></div>
+                            </>
+                         )}
                         </>
                     )}
 

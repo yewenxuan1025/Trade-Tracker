@@ -12,6 +12,7 @@ import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis } from './services/excelService';
+import { buildOptionPnlFields, isAssignmentOptionRecord } from './services/optionPnl';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
 // Action strings that legacy data stored in PnLData.name instead of PnLData.optionAction.
@@ -65,6 +66,56 @@ const toUsdByMarketValue = (amount: number, market: string, ticker: string | und
   if (ticker && /\.AX$/i.test(ticker)) return amount / (mc.aud_exg || 1);
   return amount;
 };
+
+const formatDateInputValue = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeDateInputValue = (value?: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const formatParts = (year: number, month: number, day: number): string => {
+    if (!year || year < 1900 || year > 2999 || !month || !day || month < 1 || month > 12 || day < 1 || day > 31) return '';
+    const candidate = new Date(year, month - 1, day);
+    if (
+      candidate.getFullYear() !== year ||
+      candidate.getMonth() !== month - 1 ||
+      candidate.getDate() !== day
+    ) {
+      return '';
+    }
+    return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+  };
+
+  const yearFirst = raw.match(/(\d{4})[\-/.\s年](\d{1,2})[\-/.\s月](\d{1,2})/);
+  if (yearFirst) return formatParts(Number(yearFirst[1]), Number(yearFirst[2]), Number(yearFirst[3]));
+
+  const compact = raw.match(/\b(\d{4})(\d{2})(\d{2})\b/);
+  if (compact) return formatParts(Number(compact[1]), Number(compact[2]), Number(compact[3]));
+
+  const monthOrDayFirst = raw.match(/\b(\d{1,2})[\-/.](\d{1,2})[\-/.](\d{2,4})\b/);
+  if (monthOrDayFirst) {
+    const first = Number(monthOrDayFirst[1]);
+    const second = Number(monthOrDayFirst[2]);
+    const year = Number(monthOrDayFirst[3].length === 2 ? `20${monthOrDayFirst[3]}` : monthOrDayFirst[3]);
+    const month = first > 12 ? second : first;
+    const day = first > 12 ? first : second;
+    return formatParts(year, month, day);
+  }
+
+  return '';
+};
+
+const createDefaultMarketConstants = (): MarketConstants => ({
+  date: formatDateInputValue(new Date()),
+  exg_rate: 7.8,
+  aud_exg: 1.5,
+  sg_exg: 1.3,
+});
 
 const calculateAutoCashPosition = (
   txns: TransactionData[],
@@ -137,12 +188,23 @@ const App: React.FC = () => {
   });
 
   const [marketConstants, setMarketConstants] = useState<MarketConstants>(() => {
+    const defaults = createDefaultMarketConstants();
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : { date: new Date().toISOString().split('T')[0], exg_rate: 7.8, aud_exg: 1.5, sg_exg: 1.3 };
+    if (!saved) return defaults;
+    try {
+      const parsed = JSON.parse(saved);
+      return {
+        ...defaults,
+        ...parsed,
+        date: normalizeDateInputValue(parsed.date) || defaults.date,
+      };
+    } catch (e) {
+      return defaults;
+    }
   });
 
   const applyUploadedDate = useCallback((reportDate?: string, lookupDate?: string) => {
-    const uploadedDate = reportDate || lookupDate;
+    const uploadedDate = normalizeDateInputValue(reportDate) || normalizeDateInputValue(lookupDate);
     if (!uploadedDate) return;
     setMarketConstants(prev => prev.date === uploadedDate ? prev : { ...prev, date: uploadedDate });
   }, []);
@@ -195,6 +257,7 @@ const App: React.FC = () => {
   }, [optionTransactions, toUsdByMarket]);
 
   const [activeTab, setActiveTab] = useState<'summary' | 'analytics' | 'lookup' | 'transactions' | 'pnl' | 'history' | 'nav'>('summary');
+  const [autoEditPnlRecordId, setAutoEditPnlRecordId] = useState<string | null>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -250,7 +313,10 @@ const App: React.FC = () => {
     if (!lookupData) return;
     setTransactions(prev => enrichTransactions(prev, lookupData));
     setOptionTransactions(prev => enrichOptionTransactions(prev, lookupData));
-    setPnlData(prev => enrichPnlRecords(prev, lookupData));
+    setPnlData(prev => enrichPnlRecords(prev, lookupData).map(record => {
+      if (!isAssignmentOptionRecord(record) || record.assignmentPriceStatus !== 'Pending') return record;
+      return { ...record, ...buildOptionPnlFields(record, lookupData) };
+    }));
   }, [lookupData, enrichTransactions, enrichOptionTransactions]);
 
   // #5: Auto-recalculate cash position whenever relevant data changes
@@ -591,23 +657,36 @@ const App: React.FC = () => {
     const isLong = new Date(buy.date) <= new Date(sell.date);
     const openingCost = isLong ? Math.abs(buy.total) : Math.abs(sell.total);
     const returnPercent = openingCost !== 0 ? (realizedPnL / openingCost) * 100 : 0;
+    const normalizedOptionAction = (optionAction || '').trim();
+    const isAssignment = normalizedOptionAction.toLowerCase() === 'assignment';
 
     // Resolve company name: prefer current lookup, never accept an action string as the name.
     const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
     const resolvedName = lu?.companyName || '';
 
-    const newPnl: PnLData = {
+    const basePnl: PnLData = {
         id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: resolvedName, market: buy.market || 'US',
-        account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration, optionAction,
+        account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration, optionAction: normalizedOptionAction || undefined,
         quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission, totalBuy: buy.total,
         sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission, totalSell: sell.total,
         realizedPnL, returnPercent,
-        holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24))
+        holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24)),
+        assignmentDate: isAssignment ? buy.date : undefined,
     };
+    const newPnl: PnLData = { ...basePnl, ...buildOptionPnlFields(basePnl, lookupData) };
 
     setPnlData(prev => [...prev, newPnl]);
     setOptionTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
-    showToast("Option P&L record created successfully!", 'success');
+    if (isAssignment) {
+      setAutoEditPnlRecordId(newPnl.id);
+      setActiveTab('pnl');
+    }
+    showToast(
+      newPnl.assignmentPriceStatus === 'Pending'
+        ? "Option P&L created; assignment close price is pending."
+        : "Option P&L record created successfully!",
+      newPnl.assignmentPriceStatus === 'Pending' ? 'info' : 'success'
+    );
   }, [optionTransactions, pnlData, lookupData]);
 
   const handleAddTransaction = useCallback((txn: Partial<TransactionData>) => {
@@ -818,7 +897,7 @@ const App: React.FC = () => {
                 onStockAdd={(s) => { if(lookupData) setLookupData({...lookupData, stocks: [...lookupData.stocks, s]}); }}
                 onStockEdit={(i, s) => { if(lookupData) { const n = [...lookupData.stocks]; n[i] = s; setLookupData({...lookupData, stocks: n}); } }}
                 onStockDelete={(idxs) => { if(lookupData) { const s = new Set(idxs); setLookupData({...lookupData, stocks: lookupData.stocks.filter((_, i) => !s.has(i))}); } }}
-                onExport={() => exportToExcel(lookupData?.stocks || [])}
+                onExport={() => exportToExcel(lookupData?.stocks || [], marketConstants)}
                 onUpload={(f) => handleSingleUpload('lookup', f)}
               />
             )}
@@ -865,6 +944,8 @@ const App: React.FC = () => {
                 onUpload={(f) => handleSingleUpload('pnl', f)}
                 onEditRecord={handleEditPnL}
                 onDeleteRecord={handleDeletePnL}
+                autoEditRecordId={autoEditPnlRecordId}
+                onAutoEditConsumed={() => setAutoEditPnlRecordId(null)}
               />
             )}
             {activeTab === 'nav' && (
