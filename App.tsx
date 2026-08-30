@@ -616,21 +616,39 @@ const App: React.FC = () => {
 
       const buy = t1.action.toLowerCase().includes('buy') ? t1 : t2;
       const sell = t1.action.toLowerCase().includes('sell') ? t1 : t2;
+      const assignmentTransaction = [buy, sell].find(t => !!t.assignmentType);
       const qty = Math.abs(buy.shares);
       const nextNo = pnlData.length > 0 ? Math.max(...pnlData.map(p => p.tradeNumber || 0)) + 1 : 1;
+      const stockPnlId = generateId();
 
       const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
       const newPnl: PnLData = {
-          id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: lu?.companyName || '', market: buy.market,
+          id: stockPnlId, tradeNumber: nextNo, stock: buy.stock, name: lu?.companyName || '', market: buy.market,
           account: buy.source, quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission,
           totalBuy: buy.total, sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission,
           totalSell: (sell.price * qty) - sell.commission,
           realizedPnL: ((sell.price * qty) - sell.commission) + buy.total,
           returnPercent: buy.total !== 0 ? (((sell.price * qty) - sell.commission) + buy.total) / Math.abs(buy.total) * 100 : 0,
-          holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24))
+          holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24)),
+          buyTransactionId: buy.id,
+          sellTransactionId: sell.id,
+          assignmentType: assignmentTransaction?.assignmentType,
+          assignmentSource: assignmentTransaction?.assignmentSource,
+          assignmentDate: assignmentTransaction?.assignmentDate,
+          strike: assignmentTransaction?.assignmentStrike,
+          linkedOptionTransactionIds: assignmentTransaction?.linkedOptionTransactionIds,
+          linkedOptionPnlId: assignmentTransaction?.linkedOptionPnlId,
+          linkedOptionPnlTradeNumber: assignmentTransaction?.linkedOptionPnlTradeNumber,
       };
 
-      setPnlData(prev => [...prev, newPnl]);
+      setPnlData(prev => {
+          const linked = assignmentTransaction?.linkedOptionPnlId
+            ? prev.map(record => record.id === assignmentTransaction.linkedOptionPnlId
+                ? { ...record, linkedStockTransactionId: undefined }
+                : record)
+            : prev;
+          return [...linked, newPnl];
+      });
       setTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
       showToast("Stock P&L record created successfully!", 'success');
   }, [transactions, pnlData, lookupData]);
@@ -664,27 +682,71 @@ const App: React.FC = () => {
     const lu = lookupData?.stocks.find(s => s.ticker.toUpperCase() === (buy.stock || '').toUpperCase());
     const resolvedName = lu?.companyName || '';
 
+    const pnlId = generateId();
+    const linkedStockTransactionId = isAssignment ? generateId() : undefined;
     const basePnl: PnLData = {
-        id: generateId(), tradeNumber: nextNo, stock: buy.stock, name: resolvedName, market: buy.market || 'US',
+        id: pnlId, tradeNumber: nextNo, stock: buy.stock, name: resolvedName || buy.name || buy.stock, market: buy.market || 'US',
         account: buy.source, option: buy.option, strike: buy.strike, expiration: buy.expiration, optionAction: normalizedOptionAction || undefined,
         quantity: qty, buyDate: buy.date, buyPrice: buy.price, buyComm: buy.commission, totalBuy: buy.total,
         sellDate: sell.date, sellPrice: sell.price, sellComm: sell.commission, totalSell: sell.total,
         realizedPnL, returnPercent,
         holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24)),
         assignmentDate: isAssignment ? buy.date : undefined,
+        linkedOptionTransactionIds: ids.map(String),
+        linkedStockTransactionId,
     };
     const newPnl: PnLData = { ...basePnl, ...buildOptionPnlFields(basePnl, lookupData) };
 
     setPnlData(prev => [...prev, newPnl]);
     setOptionTransactions(prev => prev.filter(t => !ids.includes(String(t.id))));
     if (isAssignment) {
+      const isPut = (buy.option || '').toLowerCase() === 'put';
+      const assignmentType: TransactionData['assignmentType'] = isPut ? 'Assigned Put' : 'Assigned Call';
+      const assignedShares = newPnl.assignedShares || qty * 100;
+      const assignmentDate = newPnl.assignmentDate || buy.date;
+      const assignmentAction = isPut ? 'Buy' : 'Sell';
+      const assignmentPrice = buy.strike || 0;
+      const assignmentCommission = 0;
+      const assignmentTotal = isPut
+        ? -Math.abs(assignmentPrice * assignedShares) - assignmentCommission
+        : Math.abs(assignmentPrice * assignedShares) - assignmentCommission;
+      const assignmentLastPrice = lu?.closePrice || assignmentPrice;
+      const stockAssignmentTransaction: TransactionData = {
+        id: linkedStockTransactionId!,
+        stock: buy.stock,
+        name: resolvedName || buy.name || buy.stock,
+        market: buy.market || lu?.market || 'US',
+        action: assignmentAction,
+        price: assignmentPrice,
+        shares: assignedShares,
+        date: assignmentDate,
+        commission: assignmentCommission,
+        total: assignmentTotal,
+        source: buy.source || 'IB AUS',
+        lastPrice: assignmentLastPrice,
+        lastMv: assignmentLastPrice * assignedShares,
+        option: '',
+        expiration: '',
+        strike: 0,
+        assignmentType,
+        assignmentSource: 'Option Assignment',
+        linkedOptionTransactionIds: ids.map(String),
+        linkedOptionPnlId: pnlId,
+        linkedOptionPnlTradeNumber: nextNo,
+        assignmentOptionType: isPut ? 'Put' : 'Call',
+        assignmentStrike: assignmentPrice,
+        assignmentDate,
+      };
+      setTransactions(prev => [...prev, stockAssignmentTransaction]);
       setAutoEditPnlRecordId(newPnl.id);
       setActiveTab('pnl');
     }
     showToast(
       newPnl.assignmentPriceStatus === 'Pending'
-        ? "Option P&L created; assignment close price is pending."
-        : "Option P&L record created successfully!",
+        ? "Option P&L and linked stock assignment created; assignment close price is pending."
+        : isAssignment
+          ? "Option P&L and linked stock assignment created successfully!"
+          : "Option P&L record created successfully!",
       newPnl.assignmentPriceStatus === 'Pending' ? 'info' : 'success'
     );
   }, [optionTransactions, pnlData, lookupData]);
@@ -698,7 +760,15 @@ const App: React.FC = () => {
         date: txn.date || new Date().toISOString().split('T')[0], commission: txn.commission || 0,
         total: txn.total || 0, source: txn.source || 'IB AUS',
         lastPrice: txn.lastPrice || lu?.closePrice || txn.price || 0,
-        lastMv: txn.lastMv || 0, option: txn.option || '', expiration: txn.expiration || '', strike: txn.strike || 0
+        lastMv: txn.lastMv || 0, option: txn.option || '', expiration: txn.expiration || '', strike: txn.strike || 0,
+        assignmentType: txn.assignmentType,
+        assignmentSource: txn.assignmentSource,
+        linkedOptionTransactionIds: txn.linkedOptionTransactionIds,
+        linkedOptionPnlId: txn.linkedOptionPnlId,
+        linkedOptionPnlTradeNumber: txn.linkedOptionPnlTradeNumber,
+        assignmentOptionType: txn.assignmentOptionType,
+        assignmentStrike: txn.assignmentStrike,
+        assignmentDate: txn.assignmentDate,
     };
     setTransactions(prev => [...prev, newTxn]);
   }, [lookupData]);
@@ -711,14 +781,46 @@ const App: React.FC = () => {
       const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
       setTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
+      setPnlData(prev => prev.map(record => record.linkedStockTransactionId && idSet.has(String(record.linkedStockTransactionId))
+          ? { ...record, linkedStockTransactionId: undefined }
+          : record));
   }, []);
 
   const handleDuplicateTransaction = useCallback((id: string) => {
       setTransactions(prev => {
           const original = prev.find(t => String(t.id) === String(id));
           if (!original) return prev;
-          return [...prev, { ...original, id: generateId() }];
+          return [...prev, {
+              ...original,
+              id: generateId(),
+              assignmentSource: original.assignmentType ? 'Manual' : undefined,
+              linkedOptionTransactionIds: undefined,
+              linkedOptionPnlId: undefined,
+              linkedOptionPnlTradeNumber: undefined,
+          }];
       });
+  }, []);
+
+  const handleSplitTransaction = useCallback((
+    originalId: string,
+    s1: { shares: number; commission: number; total: number; lastMv: number },
+    s2: { shares: number; commission: number; total: number; lastMv: number }
+  ) => {
+      const splitId1 = generateId() + '_1';
+      const splitId2 = generateId() + '_2';
+      setTransactions(prev => {
+          const index = prev.findIndex(t => String(t.id) === String(originalId));
+          if (index === -1) return prev;
+          const original = prev[index];
+          const t1 = { ...original, ...s1, id: splitId1 };
+          const t2 = { ...original, ...s2, id: splitId2 };
+          const newTxns = [...prev];
+          newTxns.splice(index, 1, t1, t2);
+          return newTxns;
+      });
+      setPnlData(prev => prev.map(record => String(record.linkedStockTransactionId) === String(originalId)
+          ? { ...record, linkedStockTransactionId: undefined }
+          : record));
   }, []);
 
   const handleAddOptionTransaction = useCallback((txn: Partial<TransactionData>) => {
@@ -772,13 +874,48 @@ const App: React.FC = () => {
   }, []);
 
   const handleEditPnL = useCallback((id: string, updated: Partial<PnLData>) => {
+      const currentRecord = pnlData.find(p => p.id === id);
+      const nextRecord = currentRecord ? { ...currentRecord, ...updated } : undefined;
       setPnlData(prev => prev.map(p => p.id === id ? { ...p, ...updated } : p));
-  }, []);
+
+      if (!nextRecord?.linkedStockTransactionId || !isAssignmentOptionRecord(nextRecord)) return;
+      setTransactions(prev => prev.map(transaction => {
+          if (transaction.id !== nextRecord.linkedStockTransactionId) return transaction;
+          const isPut = (nextRecord.option || '').toLowerCase() === 'put';
+          const action = isPut ? 'Buy' : 'Sell';
+          const shares = nextRecord.assignedShares || transaction.shares;
+          const price = nextRecord.strike || transaction.price;
+          const commission = transaction.commission || 0;
+          const total = isPut
+            ? -Math.abs(price * shares) - commission
+            : Math.abs(price * shares) - commission;
+          return {
+            ...transaction,
+            action,
+            price,
+            shares,
+            date: nextRecord.assignmentDate || transaction.date,
+            total,
+            lastMv: transaction.lastPrice * shares,
+            assignmentType: isPut ? 'Assigned Put' : 'Assigned Call',
+            assignmentOptionType: isPut ? 'Put' : 'Call',
+            assignmentStrike: price,
+            assignmentDate: nextRecord.assignmentDate || transaction.assignmentDate,
+          };
+      }));
+  }, [pnlData]);
 
   const handleDeletePnL = useCallback((idOrIds: string | string[]) => {
       const idsToRemove = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
       const idSet = new Set(idsToRemove);
-      setPnlData(prev => prev.filter(p => !idSet.has(p.id)));
+      setPnlData(prev => prev
+          .filter(p => !idSet.has(p.id))
+          .map(record => record.linkedStockPnlId && idSet.has(record.linkedStockPnlId)
+              ? { ...record, linkedStockPnlId: undefined }
+              : record));
+      setTransactions(prev => prev.map(transaction => transaction.linkedOptionPnlId && idSet.has(transaction.linkedOptionPnlId)
+          ? { ...transaction, linkedOptionPnlId: undefined, linkedOptionPnlTradeNumber: undefined }
+          : transaction));
   }, []);
 
   const handleSingleUpload = async (section: string, file: File) => {
@@ -910,18 +1047,7 @@ const App: React.FC = () => {
                 onUpload={(f) => handleSingleUpload('transaction', f)}
                 onUploadOptions={(f) => handleSingleUpload('option_transaction', f)}
                 onAppend={handleAppendProcess}
-                onSplitTransaction={(id, s1, s2) => {
-                    setTransactions(prev => {
-                        const index = prev.findIndex(t => String(t.id) === String(id));
-                        if (index === -1) return prev;
-                        const original = prev[index];
-                        const t1 = { ...original, ...s1, id: generateId() + '_1' };
-                        const t2 = { ...original, ...s2, id: generateId() + '_2' };
-                        const newTxns = [...prev];
-                        newTxns.splice(index, 1, t1, t2);
-                        return newTxns;
-                    });
-                }}
+                onSplitTransaction={handleSplitTransaction}
                 onCreatePnL={handleCreatePnL}
                 onCreateOptionPnL={handleCreateOptionPnL}
                 onAddTransaction={handleAddTransaction}

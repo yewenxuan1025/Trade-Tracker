@@ -56,9 +56,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const appendInputRef = useRef<HTMLInputElement>(null);
 
-  const [colWidths, setColWidths] = useState<Record<string, number>>({ 
+  const [colWidths, setColWidths] = useState<Record<string, number>>({
     stock: 110, name: 160, market: 80, action: 80, price: 100, shares: 100, date: 105, commission: 85, total: 115, source: 120, lastPrice: 100, lastMv: 115,
-    option: 80, expiration: 100, strike: 80, exercise: 100
+    option: 80, expiration: 100, strike: 80, exercise: 100, assignmentType: 115, linkedOptionPnlTradeNumber: 95
   });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -258,9 +258,10 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   };
 
   const filtered = useMemo(() => {
-    let res = transactions.filter(t => 
-      (t.stock || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-      (t.name || '').toLowerCase().includes(searchTerm.toLowerCase())
+    let res = transactions.filter(t =>
+      (t.stock || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (t.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (t.assignmentType || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
     if (sortConfig) res.sort((a, b) => {
         if (sortConfig.key === 'stock') {
@@ -346,8 +347,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
       // Calculate Last MV
       const lastMv = lastPrice * shares;
 
-      const finalTxn: TransactionData = { 
-        id: generateId(),
+      const finalTxn: TransactionData = {
+        id: (isOption ? editingOptionId : editingId) || generateId(),
         stock: form.stock || '',
         name: form.name || '',
         market: form.market || '',
@@ -363,7 +364,15 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
         option: form.option || (isOption ? 'Call' : ''),
         expiration: form.expiration || '',
         strike: form.strike || 0,
-        exercise: form.exercise || (isOption ? 'No' : undefined)
+        exercise: form.exercise || (isOption ? 'No' : undefined),
+        assignmentType: isOption ? undefined : form.assignmentType,
+        assignmentSource: isOption ? undefined : form.assignmentSource,
+        linkedOptionTransactionIds: isOption ? undefined : form.linkedOptionTransactionIds,
+        linkedOptionPnlId: isOption ? undefined : form.linkedOptionPnlId,
+        linkedOptionPnlTradeNumber: isOption ? undefined : form.linkedOptionPnlTradeNumber,
+        assignmentOptionType: isOption ? undefined : form.assignmentOptionType,
+        assignmentStrike: isOption ? undefined : form.assignmentStrike,
+        assignmentDate: isOption ? undefined : form.assignmentDate
       };
       
       if (isOption) {
@@ -447,6 +456,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <HeaderCell label="Comm" field="commission" />
                 <HeaderCell label="Total" field="total" />
                 <HeaderCell label="Source" field="source" />
+                <HeaderCell label="Assignment" field="assignmentType" />
+                <HeaderCell label="Option P&L" field="linkedOptionPnlTradeNumber" />
                 <HeaderCell label="Last Prc" field="lastPrice" />
                 <HeaderCell label="Last MV" field="lastMv" />
               </tr>
@@ -466,6 +477,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                     <td className="px-4 py-2 text-right font-mono text-[10px] text-slate-400">{safeFixed(t.commission)}</td>
                     <td className="px-4 py-2 text-right font-bold font-mono text-xs text-slate-700">{formatNumber(t.total)}</td>
                     <td className="px-4 py-2 text-[10px] truncate text-slate-400">{t.source}</td>
+                    <td className="px-4 py-2 text-[10px] font-semibold text-amber-600">{t.assignmentType || '-'}</td>
+                    <td className="px-4 py-2 text-[10px] font-mono text-slate-500" title={t.linkedOptionPnlId || ''}>{t.linkedOptionPnlTradeNumber ? `#${t.linkedOptionPnlTradeNumber}` : '-'}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs text-slate-500">{safeFixed(t.lastPrice)}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs text-slate-500">{formatNumber(t.lastMv)}</td>
                   </tr>
@@ -577,14 +590,51 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                   <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Ticker (Auto lookup)</label>
                   <input required className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none uppercase font-bold text-blue-600" value={txnForm.stock} onChange={e => handleTickerChange(e.target.value, setTxnForm)} placeholder="e.g. AAPL"/>
                 </div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Action</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.action} onChange={e => setTxnForm({...txnForm, action: e.target.value})}><option value="Buy">Buy</option><option value="Sell">Sell</option></select></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Action</label><select disabled={!!txnForm.assignmentType} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm disabled:bg-slate-50 disabled:text-slate-500" value={txnForm.action} onChange={e => setTxnForm({...txnForm, action: e.target.value})}><option value="Buy">Buy</option><option value="Sell">Sell</option></select></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Company Name</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-400 italic" value={txnForm.name || ''}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Market</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-400 italic" value={txnForm.market || ''}/></div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price</label><input required type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.price} onChange={e => setTxnForm({...txnForm, price: parseFloat(e.target.value)})}/></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price</label><input required type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.price} onChange={e => { const price = parseFloat(e.target.value); setTxnForm(prev => ({...prev, price, assignmentStrike: prev.assignmentType ? price : prev.assignmentStrike})); }}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Shares</label><input required type="text" inputMode="decimal" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnSharesStr} onChange={e => setTxnSharesStr(e.target.value)}/></div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Date</label><input required type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.date} onChange={e => setTxnForm({...txnForm, date: e.target.value})}/></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Date</label><input required type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.date} onChange={e => { const date = e.target.value; setTxnForm(prev => ({...prev, date, assignmentDate: prev.assignmentType ? date : prev.assignmentDate})); }}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Commission</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.commission} onChange={e => setTxnForm({...txnForm, commission: parseFloat(e.target.value)})}/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Source</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.source} onChange={e => setTxnForm({...txnForm, source: e.target.value})}><option value="IB AUS">IB AUS</option><option value="IB">IB</option><option value="Vanguard">Vanguard</option><option value="Manual">Manual</option></select></div>
+                <div>
+                  <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment</label>
+                  <select
+                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm"
+                    value={txnForm.assignmentType || ''}
+                    onChange={e => {
+                      const assignmentType = e.target.value as TransactionData['assignmentType'] | '';
+                      const assignmentOptionType = assignmentType === 'Assigned Put' ? 'Put' : assignmentType === 'Assigned Call' ? 'Call' : undefined;
+                      setTxnForm(prev => ({
+                        ...prev,
+                        assignmentType: assignmentType || undefined,
+                        assignmentOptionType,
+                        action: assignmentType === 'Assigned Put' ? 'Buy' : assignmentType === 'Assigned Call' ? 'Sell' : prev.action,
+                        assignmentSource: assignmentType ? (prev.assignmentSource || 'Manual') : undefined,
+                        assignmentDate: assignmentType ? (prev.assignmentDate || prev.date) : undefined,
+                        assignmentStrike: assignmentType ? (prev.assignmentStrike || prev.price) : undefined,
+                        linkedOptionTransactionIds: assignmentType ? prev.linkedOptionTransactionIds : undefined,
+                        linkedOptionPnlId: assignmentType ? prev.linkedOptionPnlId : undefined,
+                        linkedOptionPnlTradeNumber: assignmentType ? prev.linkedOptionPnlTradeNumber : undefined,
+                      }));
+                    }}
+                  >
+                    <option value="">Normal Trade</option>
+                    <option value="Assigned Call">Assigned Call</option>
+                    <option value="Assigned Put">Assigned Put</option>
+                  </select>
+                </div>
+                {txnForm.assignmentType && (
+                  <>
+                    <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Date</label><input type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.assignmentDate || txnForm.date || ''} onChange={e => { const assignmentDate = e.target.value; setTxnForm(prev => ({...prev, assignmentDate, date: assignmentDate})); }}/></div>
+                    <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Strike</label><input type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.assignmentStrike ?? txnForm.price ?? 0} onChange={e => { const assignmentStrike = parseFloat(e.target.value); setTxnForm(prev => ({...prev, assignmentStrike, price: assignmentStrike})); }}/></div>
+                    <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Source</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={txnForm.assignmentSource || 'Manual'} onChange={e => setTxnForm({...txnForm, assignmentSource: e.target.value as TransactionData['assignmentSource']})}><option value="Option Assignment">Option Assignment</option><option value="Manual">Manual</option></select></div>
+                    <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Linked Option P&L No.</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-500" value={txnForm.linkedOptionPnlTradeNumber ? `#${txnForm.linkedOptionPnlTradeNumber}` : 'Not linked'}/></div>
+                    {txnForm.linkedOptionPnlId && <div className="col-span-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Linked Option P&L ID</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-xs font-mono bg-slate-50 text-slate-500" value={txnForm.linkedOptionPnlId}/></div>}
+                    {!!txnForm.linkedOptionTransactionIds?.length && <div className="col-span-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Source Option Transaction IDs</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-xs font-mono bg-slate-50 text-slate-500" value={txnForm.linkedOptionTransactionIds.join(', ')}/></div>}
+                  </>
+                )}
               </div>
               <div className="pt-6 border-t flex justify-end gap-3 mt-6">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-2.5 text-slate-500 hover:bg-slate-100 rounded-xl transition-colors font-bold text-sm">Cancel</button>

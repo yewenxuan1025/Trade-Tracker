@@ -42,6 +42,14 @@ export interface TransactionData {
   expiration: string;
   strike: number;
   exercise?: string; // New field for Options
+  assignmentType?: 'Assigned Call' | 'Assigned Put';
+  assignmentSource?: 'Option Assignment' | 'Manual';
+  linkedOptionTransactionIds?: string[];
+  linkedOptionPnlId?: string;
+  linkedOptionPnlTradeNumber?: number;
+  assignmentOptionType?: 'Call' | 'Put';
+  assignmentStrike?: number;
+  assignmentDate?: string;
   type?: string;
   category?: string;
   class?: string;
@@ -85,6 +93,13 @@ export interface PnLData {
   optionEconomicPnL?: number;
   optionEconomicReturnPercent?: number;
   assignmentPriceStatus?: 'Lookup Data' | 'Manual' | 'Pending' | 'Not Required';
+  assignmentType?: 'Assigned Call' | 'Assigned Put';
+  assignmentSource?: 'Option Assignment' | 'Manual';
+  linkedOptionTransactionIds?: string[];
+  linkedOptionPnlId?: string;
+  linkedOptionPnlTradeNumber?: number;
+  linkedStockTransactionId?: string;
+  linkedStockPnlId?: string;
 
   // Target Metrics (Calculated)
   tgtProfitCost?: number;
@@ -185,6 +200,7 @@ export const EXCEL_HEADER_MAP: Record<string, keyof StockData> = {
 };
 
 export const TRANSACTION_HEADER_MAP: Record<string, keyof TransactionData> = {
+  'Transaction ID': 'id',
   'Stock': 'stock',
   'Name': 'name',
   'Market': 'market',
@@ -201,12 +217,21 @@ export const TRANSACTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Option': 'option',
   'Expiration': 'expiration',
   'Strike': 'strike',
+  'Assignment Type': 'assignmentType',
+  'Assignment Source': 'assignmentSource',
+  'Linked Option Transaction IDs': 'linkedOptionTransactionIds',
+  'Linked Option P&L ID': 'linkedOptionPnlId',
+  'Linked Option P&L No.': 'linkedOptionPnlTradeNumber',
+  'Assignment Option Type': 'assignmentOptionType',
+  'Assignment Strike': 'assignmentStrike',
+  'Assignment Date': 'assignmentDate',
   'Type': 'type',
   'Category': 'category',
   'Class': 'class'
 };
 
 export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
+  'Transaction ID': 'id',
   'Stock': 'stock',
   'Name': 'name',
   'Market': 'market',
@@ -225,6 +250,7 @@ export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
 };
 
 export const PNL_HEADER_MAP: Record<string, string> = {
+  'P&L ID': 'id',
   'No.': 'tradeNumber',
   'Stock': 'stock',
   'Name': 'name',
@@ -255,6 +281,13 @@ export const PNL_HEADER_MAP: Record<string, string> = {
   'Option Economic P&L': 'optionEconomicPnL',
   'Option Economic Return %': 'optionEconomicReturnPercent',
   'Assignment Price Status': 'assignmentPriceStatus',
+  'Assignment Type': 'assignmentType',
+  'Assignment Source': 'assignmentSource',
+  'Linked Option Transaction IDs': 'linkedOptionTransactionIds',
+  'Linked Option P&L ID': 'linkedOptionPnlId',
+  'Linked Option P&L No.': 'linkedOptionPnlTradeNumber',
+  'Linked Stock Transaction ID': 'linkedStockTransactionId',
+  'Linked Stock P&L ID': 'linkedStockPnlId',
   'Strike': 'strike',
   'Expiration': 'expiration'
 };

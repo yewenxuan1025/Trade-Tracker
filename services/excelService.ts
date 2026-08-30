@@ -105,7 +105,16 @@ const parseExcelDate = (val: any): string => {
 };
 
 const NUMERIC_KEYS: (keyof StockData)[] = ['marketCap', 'closePrice', 'peTTM', 'pb', 'dividendYield', 'roeTTM', 'psQuantile'];
-const TRANSACTION_NUMERIC_KEYS: (keyof TransactionData)[] = ['price', 'shares', 'commission', 'total', 'lastPrice', 'lastMv', 'strike'];
+const TRANSACTION_NUMERIC_KEYS: (keyof TransactionData)[] = [
+    'price', 'shares', 'commission', 'total', 'lastPrice', 'lastMv', 'strike',
+    'linkedOptionPnlTradeNumber', 'assignmentStrike'
+];
+const TRANSACTION_ARRAY_KEYS: (keyof TransactionData)[] = ['linkedOptionTransactionIds'];
+
+const parseIdList = (value: unknown): string[] => String(value || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
 const TWO_DECIMAL_KEYS: (keyof StockData)[] = ['dividendYield', 'roeTTM', 'psQuantile', 'pb', 'closePrice', 'peTTM'];
 const NAV_NUMERIC_KEYS: (keyof NavData)[] = ['aum', 'nav1', 'cumulativeReturn', 'shares', 'nav2', 'cashFlow'];
 
@@ -128,6 +137,7 @@ const LOOKUP_EXPORT_MAP: Record<string, string> = {
 };
 
 const TRANSACTION_EXPORT_MAP: Record<string, string> = {
+    id: 'Transaction ID',
     stock: 'Stock',
     name: 'Name',
     market: 'Market',
@@ -143,10 +153,19 @@ const TRANSACTION_EXPORT_MAP: Record<string, string> = {
     option: 'Option',
     expiration: 'Expiration',
     strike: 'Strike',
-    exercise: 'Exercise'
+    exercise: 'Exercise',
+    assignmentType: 'Assignment Type',
+    assignmentSource: 'Assignment Source',
+    linkedOptionTransactionIds: 'Linked Option Transaction IDs',
+    linkedOptionPnlId: 'Linked Option P&L ID',
+    linkedOptionPnlTradeNumber: 'Linked Option P&L No.',
+    assignmentOptionType: 'Assignment Option Type',
+    assignmentStrike: 'Assignment Strike',
+    assignmentDate: 'Assignment Date'
 };
 
 const OPTION_EXPORT_MAP: Record<string, string> = {
+    id: 'Transaction ID',
     stock: 'Stock',
     name: 'Name',
     market: 'Market',
@@ -164,6 +183,7 @@ const OPTION_EXPORT_MAP: Record<string, string> = {
 };
 
 const PNL_EXPORT_MAP: Record<string, string> = {
+    id: 'P&L ID',
     tradeNumber: 'No.',
     stock: 'Stock',
     name: 'Name',
@@ -188,6 +208,13 @@ const PNL_EXPORT_MAP: Record<string, string> = {
     optionEconomicPnL: 'Option Economic P&L',
     optionEconomicReturnPercent: 'Option Economic Return %',
     assignmentPriceStatus: 'Assignment Price Status',
+    assignmentType: 'Assignment Type',
+    assignmentSource: 'Assignment Source',
+    linkedOptionTransactionIds: 'Linked Option Transaction IDs',
+    linkedOptionPnlId: 'Linked Option P&L ID',
+    linkedOptionPnlTradeNumber: 'Linked Option P&L No.',
+    linkedStockTransactionId: 'Linked Stock Transaction ID',
+    linkedStockPnlId: 'Linked Stock P&L ID',
     returnPercent: 'Return %',
     holdingDays: 'Holding Days',
     year: 'Year',
@@ -212,7 +239,7 @@ const mapToExport = (data: any[], map: Record<string, string>) => {
         const newItem: any = {};
         Object.entries(map).forEach(([key, header]) => {
             if (item[key] !== undefined && item[key] !== null) {
-                newItem[header] = item[key];
+                newItem[header] = Array.isArray(item[key]) ? item[key].join(', ') : item[key];
             }
         });
         return newItem;
@@ -602,11 +629,12 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     const txn: Partial<TransactionData> = {};
                     Object.entries(columnMap).forEach(([colIndex, key]) => {
                         const val = row[parseInt(colIndex)];
-                        if (key === 'date' || key === 'expiration') txn[key] = parseExcelDate(val);
+                        if (key === 'date' || key === 'expiration' || key === 'assignmentDate') txn[key] = parseExcelDate(val);
                         else if (TRANSACTION_NUMERIC_KEYS.includes(key)) (txn as any)[key] = parseNumeric(val);
+                        else if (TRANSACTION_ARRAY_KEYS.includes(key)) (txn as any)[key] = parseIdList(val);
                         else (txn as any)[key] = val !== undefined ? String(val) : '';
                     });
-                    txn.id = generateId();
+                    txn.id = txn.id || generateId();
                     if (txn.stock) {
                       // Normalise HK tickers to 4 digits
                       txn.stock = padHkTicker(txn.stock, txn.market || '');
@@ -660,11 +688,12 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     const txn: Partial<TransactionData> = {};
                     Object.entries(columnMap).forEach(([colIndex, key]) => {
                         const val = row[parseInt(colIndex)];
-                        if (key === 'date' || key === 'expiration') txn[key] = parseExcelDate(val);
+                        if (key === 'date' || key === 'expiration' || key === 'assignmentDate') txn[key] = parseExcelDate(val);
                         else if (TRANSACTION_NUMERIC_KEYS.includes(key)) (txn as any)[key] = parseNumeric(val);
+                        else if (TRANSACTION_ARRAY_KEYS.includes(key)) (txn as any)[key] = parseIdList(val);
                         else (txn as any)[key] = val !== undefined ? String(val) : '';
                     });
-                    txn.id = generateId();
+                    txn.id = txn.id || generateId();
                     if (txn.stock) optionTransactions.push(txn as TransactionData);
                 }
             }
@@ -682,7 +711,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                 const sheet = workbook.Sheets[sheetName];
                 const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
                 return jsonData.map(row => ({
-                    id: row.id || generateId(),
+                    id: row['P&L ID'] || row.id || generateId(),
                     tradeNumber: parseNumeric(row['No.']),
                     stock: row['Stock'] || '',
                     name: '',
@@ -707,6 +736,13 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     optionEconomicPnL: hasCellValue(row['Option Economic P&L']) ? parseNumeric(row['Option Economic P&L']) : undefined,
                     optionEconomicReturnPercent: hasCellValue(row['Option Economic Return %']) ? parseNumeric(row['Option Economic Return %']) : undefined,
                     assignmentPriceStatus: hasCellValue(row['Assignment Price Status']) ? row['Assignment Price Status'] : undefined,
+                    assignmentType: hasCellValue(row['Assignment Type']) ? row['Assignment Type'] : undefined,
+                    assignmentSource: hasCellValue(row['Assignment Source']) ? row['Assignment Source'] : undefined,
+                    linkedOptionTransactionIds: hasCellValue(row['Linked Option Transaction IDs']) ? parseIdList(row['Linked Option Transaction IDs']) : undefined,
+                    linkedOptionPnlId: hasCellValue(row['Linked Option P&L ID']) ? String(row['Linked Option P&L ID']) : undefined,
+                    linkedOptionPnlTradeNumber: hasCellValue(row['Linked Option P&L No.']) ? parseNumeric(row['Linked Option P&L No.']) : undefined,
+                    linkedStockTransactionId: hasCellValue(row['Linked Stock Transaction ID']) ? String(row['Linked Stock Transaction ID']) : undefined,
+                    linkedStockPnlId: hasCellValue(row['Linked Stock P&L ID']) ? String(row['Linked Stock P&L ID']) : undefined,
                     returnPercent: parseNumeric(row['Return %']),
                     holdingDays: parseNumeric(row['Holding Days']),
                     year: parseNumeric(row['Year']),
@@ -940,14 +976,16 @@ export const exportTransactionsToExcel = (transactions: TransactionData[], optio
   const workbook = XLSX.utils.book_new();
 
   // Stock Transactions
-  const worksheet = XLSX.utils.json_to_sheet(transactions);
-  formatWorksheet(worksheet, transactions);
+  const mappedTransactions = mapToExport(transactions, TRANSACTION_EXPORT_MAP);
+  const worksheet = XLSX.utils.json_to_sheet(mappedTransactions);
+  formatWorksheet(worksheet, mappedTransactions);
   XLSX.utils.book_append_sheet(workbook, worksheet, "Transaction");
 
   // Option Transactions
   if (optionTransactions && optionTransactions.length > 0) {
-      const optWorksheet = XLSX.utils.json_to_sheet(optionTransactions);
-      formatWorksheet(optWorksheet, optionTransactions);
+      const mappedOptions = mapToExport(optionTransactions, OPTION_EXPORT_MAP);
+      const optWorksheet = XLSX.utils.json_to_sheet(mappedOptions);
+      formatWorksheet(optWorksheet, mappedOptions);
       XLSX.utils.book_append_sheet(workbook, optWorksheet, "Transactions_Option");
   }
 

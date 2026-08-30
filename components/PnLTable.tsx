@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PnLData, MarketConstants, LookupSheetData } from '../types';
 import { buildOptionPnlFields, getOptionOpeningAmount, getOptionPnlValue, getOptionReturnPercentValue, isAssignmentOptionRecord, isOptionPnlRecord } from '../services/optionPnl';
-import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload } from 'lucide-react';
+import { AlertCircle, TrendingUp, TrendingDown, Calendar, Percent, Download, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Pencil, X, Upload, Link2 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 
 interface PnLTableProps {
@@ -119,6 +119,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
   const [optionSortConfig, setOptionSortConfig] = useState<{ key: keyof DisplayPnLData; direction: 'asc' | 'desc' } | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [selectedOptionIds, setSelectedOptionIds] = useState<Set<string>>(new Set());
+  const [focusedOptionPnlId, setFocusedOptionPnlId] = useState<string | null>(null);
+  const optionTableRef = useRef<HTMLDivElement>(null);
 
   const getEditableRecord = (record: PnLData): PnLData => {
     return isOptionPnlRecord(record)
@@ -141,6 +143,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
     displayPnl: 110, displayReturnPercent: 95,
     buyPrice: 90, buyComm: 90, sellPrice: 90, sellComm: 90, totalBuy: 115, totalSell: 115, realizedPnL: 110, returnPercent: 95,
     premiumPnl: 110, assignmentClosePrice: 110, assignedShares: 105, assignmentImpact: 115, assignmentPriceStatus: 120,
+    assignmentType: 115, assignmentDate: 105, linkedOptionPnlTradeNumber: 95,
     tgtProfitCost: 110, tgtProfitSales: 110, tgtLossCost: 110, tgtLossSales: 110, option: 80, strike: 80, expiration: 100, optionAction: 120
   });
 
@@ -250,6 +253,28 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
 
   const processedStocks = useMemo(() => processData(stockPnl, stockSortConfig, stockFilters), [stockPnl, stockSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, stockFilters, marketConstants]);
   const processedOptions = useMemo(() => processData(optionPnl, optionSortConfig, optionFilters), [optionPnl, optionSortConfig, targetStartDate, targetEndDate, targetProfitPct, targetLossPct, optionFilters, marketConstants]);
+  const optionPnlIds = useMemo(() => new Set(optionPnl.map(record => record.id)), [optionPnl]);
+
+  const focusLinkedOptionPnl = (linkedOptionPnlId: string | undefined) => {
+      if (!linkedOptionPnlId || !optionPnlIds.has(linkedOptionPnlId)) return;
+      setOptionFilters(initialFilters);
+      setFocusedOptionPnlId(linkedOptionPnlId);
+  };
+
+  useEffect(() => {
+      if (!focusedOptionPnlId) return;
+      const targetIndex = processedOptions.findIndex(record => record.id === focusedOptionPnlId);
+      if (targetIndex === -1) return;
+      const targetPage = Math.floor(targetIndex / itemsPerPage) + 1;
+      if (optionPage !== targetPage) {
+          setOptionPage(targetPage);
+          return;
+      }
+
+      optionTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const timer = window.setTimeout(() => setFocusedOptionPnlId(null), 3000);
+      return () => window.clearTimeout(timer);
+  }, [focusedOptionPnlId, processedOptions, optionPage]);
 
   // Default to Last Page on Data Change
   useEffect(() => {
@@ -258,6 +283,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
   }, [processedStocks.length]);
 
   useEffect(() => {
+      if (focusedOptionPnlId) return;
       const total = Math.ceil(processedOptions.length / itemsPerPage);
       setOptionPage(total > 0 ? total : 1);
   }, [processedOptions.length]);
@@ -353,13 +379,13 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
 
   const stripDisplayFields = ({ displayOpenDate, displayCloseDate, displayHoldingDays, displayPnl, displayReturnPercent, ...record }: DisplayPnLData) => record;
 
-  const renderTable = (title: string, tableData: any[], selectedIds: Set<string>, setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>, sortConfig: any, setSortConfig: any, isOption = false, page: number, setPage: (p: number) => void, showFilters: boolean, setShowFilters: (s: boolean) => void, filters: FilterState, setFilters: (f: FilterState) => void) => {
+  const renderTable = (title: string, tableData: any[], selectedIds: Set<string>, setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>, sortConfig: any, setSortConfig: any, isOption = false, page: number, setPage: (p: number) => void, showFilters: boolean, setShowFilters: (s: boolean) => void, filters: FilterState, setFilters: (f: FilterState) => void, tableRef?: React.RefObject<HTMLDivElement | null>) => {
     const totalPages = Math.ceil(tableData.length / itemsPerPage);
     const startIndex = (page - 1) * itemsPerPage;
     const paginatedData = tableData.slice(startIndex, startIndex + itemsPerPage);
 
     return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-[600px] flex-shrink-0 relative overflow-hidden">
+    <div ref={tableRef} className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-[600px] flex-shrink-0 relative overflow-hidden">
        <div className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm flex-shrink-0">
           <div className="p-4 flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -457,6 +483,10 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
               {isOption && <HeaderCell label="Price Status" field="assignmentPriceStatus" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               <HeaderCell label={isOption ? "Econ P&L" : "P&L"} field="displayPnl" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="P&L %" field="displayReturnPercent" sortConfig={sortConfig} setSortConfig={setSortConfig} />
+              {!isOption && <HeaderCell label="Assignment" field="assignmentType" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {!isOption && <HeaderCell label="Assign Date" field="assignmentDate" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {!isOption && <HeaderCell label="Assign Strike" field="strike" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
+              {!isOption && <HeaderCell label="Option P&L" field="linkedOptionPnlTradeNumber" sortConfig={sortConfig} setSortConfig={setSortConfig} />}
               <HeaderCell label="Tgt Prof Cost" field="tgtProfitCost" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Tgt Prof Sales" field="tgtProfitSales" sortConfig={sortConfig} setSortConfig={setSortConfig} />
               <HeaderCell label="Tgt Loss Cost" field="tgtLossCost" sortConfig={sortConfig} setSortConfig={setSortConfig} />
@@ -465,8 +495,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
           </thead>
           <tbody className="divide-y divide-slate-100">
             {paginatedData.map((r) => (
-              <tr key={r.id} className={`group cursor-pointer transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}>
-                <td className={`px-2 py-2 sticky left-0 z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}>
+              <tr key={r.id} className={`group cursor-pointer transition-colors ${focusedOptionPnlId === r.id ? 'bg-amber-50' : selectedIds.has(r.id) ? 'bg-blue-50' : 'hover:bg-slate-50/50'}`} onClick={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}>
+                <td className={`px-2 py-2 sticky left-0 z-10 border-r ${focusedOptionPnlId === r.id ? 'bg-amber-50' : selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`} onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-center gap-1">
                     <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => { const n = new Set(selectedIds); if(n.has(r.id)) n.delete(r.id); else n.add(r.id); setSelectedIds(n); }}/>
                     <button onClick={() => openEditRecord(r.id)} className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit record">
@@ -474,8 +504,8 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                     </button>
                   </div>
                 </td>
-                <td className={`px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[64px] z-10 border-r ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.tradeNumber}</td>
-                <td className={`px-3 py-2 font-extrabold text-blue-600 sticky left-[114px] z-10 border-r text-xs ${selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.stock}</td>
+                <td className={`px-3 py-2 text-center text-[10px] text-slate-400 sticky left-[64px] z-10 border-r ${focusedOptionPnlId === r.id ? 'bg-amber-50' : selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.tradeNumber}</td>
+                <td className={`px-3 py-2 font-extrabold text-blue-600 sticky left-[114px] z-10 border-r text-xs ${focusedOptionPnlId === r.id ? 'bg-amber-50' : selectedIds.has(r.id) ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50/50'}`}>{r.stock}</td>
                 {isOption && <td className="px-3 py-2 text-[10px] text-purple-600 font-bold">{r.option}</td>}
                 {isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-600">{r.strike}</td>}
                 {isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.expiration}</td>}
@@ -499,6 +529,21 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                 {isOption && <td className={`px-3 py-2 text-[10px] font-bold whitespace-nowrap ${r.assignmentPriceStatus === 'Pending' ? 'text-amber-500' : 'text-slate-500'}`}>{isAssignmentOptionRecord(r) ? (r.assignmentPriceStatus || '-') : '-'}</td>}
                 <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${pnlTextClass(r.displayPnl)}`}>{r.displayPnl === undefined ? 'Pending' : formatNumber(r.displayPnl)}</td>
                 <td className={`px-3 py-2 text-right font-extrabold font-mono text-xs ${pnlTextClass(r.displayReturnPercent)}`}>{formatOptionalPercent(r.displayReturnPercent)}</td>
+                {!isOption && <td className={`px-3 py-2 text-[10px] font-semibold whitespace-nowrap ${r.assignmentType ? 'text-amber-600' : 'text-slate-300'}`}>{r.assignmentType || '-'}</td>}
+                {!isOption && <td className="px-3 py-2 text-[10px] text-slate-500">{r.assignmentDate || '-'}</td>}
+                {!isOption && <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-500">{r.assignmentType ? formatOptionalNumber(r.strike) : '-'}</td>}
+                {!isOption && <td className="px-3 py-2 text-[10px] font-mono text-slate-500">
+                  {r.linkedOptionPnlId && optionPnlIds.has(r.linkedOptionPnlId) ? (
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); focusLinkedOptionPnl(r.linkedOptionPnlId); }}
+                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
+                      title="Open linked Option Realized P&L"
+                    >
+                      <Link2 size={11} />{r.linkedOptionPnlTradeNumber ? `#${r.linkedOptionPnlTradeNumber}` : 'Linked'}
+                    </button>
+                  ) : r.linkedOptionPnlId ? <span className="text-amber-500" title="Linked Option P&L record is unavailable">Missing</span> : '-'}
+                </td>}
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtProfitCost ? formatNumber(r.tgtProfitCost) : '-'}</td>
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtProfitSales ? formatNumber(r.tgtProfitSales) : '-'}</td>
                 <td className="px-3 py-2 text-right font-mono text-[9px] text-slate-400 italic">{r.tgtLossCost ? formatNumber(r.tgtLossCost) : '-'}</td>
@@ -582,7 +627,7 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
       </div>
 
       {renderTable("Stock Realized P&L", processedStocks, selectedStockIds, setSelectedStockIds, stockSortConfig, setStockSortConfig, false, stockPage, setStockPage, showStockFilters, setShowStockFilters, stockFilters, setStockFilters)}
-      {renderTable("Option Realized P&L", processedOptions, selectedOptionIds, setSelectedOptionIds, optionSortConfig, setOptionSortConfig, true, optionPage, setOptionPage, showOptionFilters, setShowOptionFilters, optionFilters, setOptionFilters)}
+      {renderTable("Option Realized P&L", processedOptions, selectedOptionIds, setSelectedOptionIds, optionSortConfig, setOptionSortConfig, true, optionPage, setOptionPage, showOptionFilters, setShowOptionFilters, optionFilters, setOptionFilters, optionTableRef)}
 
       {isEditModalOpen && editingRecord && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
@@ -615,6 +660,62 @@ const PnLTable: React.FC<PnLTableProps> = ({ data, marketConstants, lookupData, 
                               <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Price Status</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentPriceStatus || 'Pending'} onChange={e => setEditingRecord({...editingRecord!, assignmentPriceStatus: e.target.value as PnLData['assignmentPriceStatus']})}><option value="Pending">Pending</option><option value="Manual">Manual</option><option value="Lookup Data">Lookup Data</option></select></div>
                             </>
                          )}
+                        </>
+                    )}
+
+                    {!isOptionPnlRecord(editingRecord) && (
+                        <>
+                          <div className="col-span-2 border-t pt-4 mt-2">
+                            <span className="text-[10px] font-extrabold text-slate-400 uppercase">Assignment Details</span>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Type</label>
+                            <select
+                              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm"
+                              value={editingRecord.assignmentType || ''}
+                              onChange={e => {
+                                const assignmentType = e.target.value as PnLData['assignmentType'] | '';
+                                if (!assignmentType) {
+                                  setEditingRecord({
+                                    ...editingRecord,
+                                    assignmentType: undefined,
+                                    assignmentSource: undefined,
+                                    assignmentDate: undefined,
+                                    strike: undefined,
+                                    linkedOptionTransactionIds: undefined,
+                                    linkedOptionPnlId: undefined,
+                                    linkedOptionPnlTradeNumber: undefined,
+                                  });
+                                  return;
+                                }
+                                const isPut = assignmentType === 'Assigned Put';
+                                setEditingRecord({
+                                  ...editingRecord,
+                                  assignmentType,
+                                  assignmentSource: editingRecord.assignmentSource || 'Manual',
+                                  assignmentDate: editingRecord.assignmentDate || (isPut ? editingRecord.buyDate : editingRecord.sellDate),
+                                  strike: editingRecord.strike ?? (isPut ? editingRecord.buyPrice : editingRecord.sellPrice),
+                                });
+                              }}
+                            >
+                              <option value="">Normal Trade</option>
+                              <option value="Assigned Call">Assigned Call</option>
+                              <option value="Assigned Put">Assigned Put</option>
+                            </select>
+                          </div>
+                          {editingRecord.assignmentType && (
+                            <>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Date</label><input type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentDate || ''} onChange={e => setEditingRecord({...editingRecord, assignmentDate: e.target.value})}/></div>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Strike</label><input type="number" step="0.000001" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.strike ?? ''} onChange={e => setEditingRecord({...editingRecord, strike: e.target.value === '' ? undefined : parseFloat(e.target.value)})}/></div>
+                              <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Assignment Source</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={editingRecord.assignmentSource || 'Manual'} onChange={e => setEditingRecord({...editingRecord, assignmentSource: e.target.value as PnLData['assignmentSource']})}><option value="Option Assignment">Option Assignment</option><option value="Manual">Manual</option></select></div>
+                              <div>
+                                <label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Linked Option P&L No.</label>
+                                <input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-sm bg-slate-50 text-slate-500" value={editingRecord.linkedOptionPnlTradeNumber ? `#${editingRecord.linkedOptionPnlTradeNumber}` : 'Not linked'}/>
+                              </div>
+                              {editingRecord.linkedOptionPnlId && <div className="col-span-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Linked Option P&L ID</label><input readOnly className="w-full border border-slate-100 rounded-lg p-2.5 text-xs font-mono bg-slate-50 text-slate-500" value={editingRecord.linkedOptionPnlId}/></div>}
+                              {!!editingRecord.linkedOptionTransactionIds?.length && <div className="col-span-2"><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Source Option Transaction IDs</label><textarea readOnly rows={2} className="w-full resize-none border border-slate-100 rounded-lg p-2.5 text-xs font-mono bg-slate-50 text-slate-500" value={editingRecord.linkedOptionTransactionIds.join(', ')}/></div>}
+                            </>
+                          )}
                         </>
                     )}
 
