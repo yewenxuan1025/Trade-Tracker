@@ -1307,10 +1307,13 @@ export const exportGlobalData = (
     const workbook = XLSX.utils.book_new();
 
     // 0. PORTFOLIO SUMMARY
+    const holdingsUsOnly = holdingsUs.filter((h: any) => !isAusMarketTicker(h.Market || '', h.Stock));
+    const holdingsAus = holdingsUs.filter((h: any) => isAusMarketTicker(h.Market || '', h.Stock));
     const totalHk = holdingsHk.reduce((acc, r) => acc + (r.LastMV || 0), 0);
     const totalCcs = holdingsCcs.reduce((acc, r) => acc + (r.LastMV || 0), 0);
-    const totalUs = holdingsUs.reduce((acc, r) => acc + (r.LastMV || 0), 0);
-    const totalPortfolio = totalHk + totalCcs + totalUs + cashPosition + optionPosition;
+    const totalUs = holdingsUsOnly.reduce((acc, r) => acc + (r.LastMV || 0), 0);
+    const totalAus = holdingsAus.reduce((acc, r) => acc + (r.LastMV || 0), 0);
+    const totalPortfolio = totalHk + totalCcs + totalUs + totalAus + cashPosition + optionPosition;
     
     // Calculate Summary Statistics
     let totalWinUsd = 0;
@@ -1347,7 +1350,8 @@ export const exportGlobalData = (
     const overviewData = [
         { Category: 'PORTFOLIO ALLOCATION', Value: '', Percentage: '' },
         { Category: 'CCS Stocks', Value: totalCcs, Percentage: totalPortfolio ? totalCcs/totalPortfolio : 0 },
-        { Category: 'US & Global', Value: totalUs, Percentage: totalPortfolio ? totalUs/totalPortfolio : 0 },
+        { Category: 'US Stocks', Value: totalUs, Percentage: totalPortfolio ? totalUs/totalPortfolio : 0 },
+        { Category: 'AUS Stocks', Value: totalAus, Percentage: totalPortfolio ? totalAus/totalPortfolio : 0 },
         { Category: 'HK Stocks', Value: totalHk, Percentage: totalPortfolio ? totalHk/totalPortfolio : 0 },
         { Category: 'Options Value', Value: optionPosition, Percentage: totalPortfolio ? optionPosition/totalPortfolio : 0 },
         { Category: 'Cash Position', Value: cashPosition, Percentage: totalPortfolio ? cashPosition/totalPortfolio : 0 },
@@ -1443,19 +1447,17 @@ export const exportGlobalData = (
         XLSX.utils.book_append_sheet(workbook, ws, "Holdings CCS (USD)");
     }
 
-    if (holdingsUs.length > 0) {
-        const holdingsUsOnly = holdingsUs.filter((h: any) => !isAusMarketTicker(h.Market || '', h.Stock)).map(({Market, ...rest}: any) => rest);
-        const holdingsAus = holdingsUs.filter((h: any) => isAusMarketTicker(h.Market || '', h.Stock)).map(({Market, ...rest}: any) => rest);
-        if (holdingsUsOnly.length > 0) {
-            const ws = XLSX.utils.json_to_sheet(holdingsUsOnly);
-            formatWorksheet(ws, holdingsUsOnly);
-            XLSX.utils.book_append_sheet(workbook, ws, "Holdings US (USD)");
-        }
-        if (holdingsAus.length > 0) {
-            const ws = XLSX.utils.json_to_sheet(holdingsAus);
-            formatWorksheet(ws, holdingsAus);
-            XLSX.utils.book_append_sheet(workbook, ws, "Holdings AUS (USD)");
-        }
+    if (holdingsUsOnly.length > 0) {
+        const holdingsUsExport = holdingsUsOnly.map(({Market, ...rest}: any) => rest);
+        const ws = XLSX.utils.json_to_sheet(holdingsUsExport);
+        formatWorksheet(ws, holdingsUsExport);
+        XLSX.utils.book_append_sheet(workbook, ws, "Holdings US (USD)");
+    }
+    if (holdingsAus.length > 0) {
+        const holdingsAusExport = holdingsAus.map(({Market, ...rest}: any) => rest);
+        const ws = XLSX.utils.json_to_sheet(holdingsAusExport);
+        formatWorksheet(ws, holdingsAusExport);
+        XLSX.utils.book_append_sheet(workbook, ws, "Holdings AUS (USD)");
     }
 
     // 2.5 FUNDAMENTAL ANALYSIS
