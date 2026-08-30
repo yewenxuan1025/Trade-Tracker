@@ -11,7 +11,7 @@ import SummaryDashboard from './components/SummaryDashboard';
 import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
-import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis } from './services/excelService';
+import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis, type ImportedExchangeRates } from './services/excelService';
 import { buildOptionPnlFields, isAssignmentOptionRecord } from './services/optionPnl';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
@@ -117,6 +117,20 @@ const createDefaultMarketConstants = (): MarketConstants => ({
   sg_exg: 1.3,
 });
 
+const mergeUploadedMarketConstants = (
+  current: MarketConstants,
+  reportDate?: string,
+  lookupDate?: string,
+  exchangeRates?: ImportedExchangeRates,
+): MarketConstants => {
+  const uploadedDate = normalizeDateInputValue(reportDate) || normalizeDateInputValue(lookupDate);
+  return {
+    ...current,
+    ...(uploadedDate ? { date: uploadedDate } : {}),
+    ...(exchangeRates || {}),
+  };
+};
+
 const calculateAutoCashPosition = (
   txns: TransactionData[],
   optTxns: TransactionData[],
@@ -203,10 +217,8 @@ const App: React.FC = () => {
     }
   });
 
-  const applyUploadedDate = useCallback((reportDate?: string, lookupDate?: string) => {
-    const uploadedDate = normalizeDateInputValue(reportDate) || normalizeDateInputValue(lookupDate);
-    if (!uploadedDate) return;
-    setMarketConstants(prev => prev.date === uploadedDate ? prev : { ...prev, date: uploadedDate });
+  const applyUploadedMarketConstants = useCallback((reportDate?: string, lookupDate?: string, exchangeRates?: ImportedExchangeRates) => {
+    setMarketConstants(prev => mergeUploadedMarketConstants(prev, reportDate, lookupDate, exchangeRates));
   }, []);
 
   // Auto-calculated cash position (from ledger + PnL + transactions)
@@ -337,7 +349,8 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
-      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
+      const nextMarketConstants = mergeUploadedMarketConstants(marketConstants, result.reportDate, result.lookup?.lookupDate, result.exchangeRates);
+      setMarketConstants(nextMarketConstants);
       if (lookupData) {
           const oldMap = new Map<string, StockData>();
           lookupData.stocks.forEach(s => oldMap.set(s.ticker.toUpperCase(), s));
@@ -379,7 +392,7 @@ const App: React.FC = () => {
         nextDividends,
         nextInterest,
         nextCashLedger,
-        marketConstants,
+        nextMarketConstants,
       );
       setCashPosition(nextAutoCash);
       if (result.portfolioCashPosition !== undefined) {
@@ -402,7 +415,7 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const result = await parseExcelFile(file);
-      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
+      applyUploadedMarketConstants(result.reportDate, result.lookup?.lookupDate, result.exchangeRates);
 
       // 1. Merge Lookup Data
       setLookupData(prev => {
@@ -551,7 +564,7 @@ const App: React.FC = () => {
   const handleIncomeUpload = useCallback(async (file: File) => {
     try {
       const result = await parseExcelFile(file);
-      applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
+      applyUploadedMarketConstants(result.reportDate, result.lookup?.lookupDate, result.exchangeRates);
       if (result.dividends.length > 0) {
         setDividendData(prev => {
           const existing = new Set(prev.map(d => `${d.date}|${d.symbol}|${d.netAmount}|${d.source}`));
@@ -582,7 +595,7 @@ const App: React.FC = () => {
     } catch (e) {
       showToast('Error reading income file: ' + (e as Error).message, 'error');
     }
-  }, [applyUploadedDate, showToast]);
+  }, [applyUploadedMarketConstants, showToast]);
 
   const handleBenchmarkUpload = useCallback(async (file: File) => {
     try {
@@ -921,7 +934,7 @@ const App: React.FC = () => {
   const handleSingleUpload = async (section: string, file: File) => {
     try {
         const result = await parseExcelFile(file);
-        applyUploadedDate(result.reportDate, result.lookup?.lookupDate);
+        applyUploadedMarketConstants(result.reportDate, result.lookup?.lookupDate, result.exchangeRates);
         if (section === 'lookup') setLookupData(result.lookup);
         else if (section === 'transaction') {
             setTransactions(enrichTransactions(result.transactions, lookupData));

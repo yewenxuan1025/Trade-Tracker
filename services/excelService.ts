@@ -257,9 +257,12 @@ export interface ParseResult {
   cashLedger: CashLedgerEntry[];
   portfolioCashPosition?: number;
   reportDate?: string;
+  exchangeRates?: ImportedExchangeRates;
   benchmark: BenchmarkData;
   warnings: string[];
 }
+
+export type ImportedExchangeRates = Partial<Pick<MarketConstants, 'exg_rate' | 'aud_exg' | 'sg_exg'>>;
 
 const normalizeWorkbookLabel = (val: any): string =>
   String(val ?? '')
@@ -273,6 +276,31 @@ const hasCellValue = (val: any): boolean =>
   val !== null && val !== undefined && String(val).trim() !== '';
 
 const LOOKUP_DATE_LABELS = new Set(['date', 'lookup date', 'data date', 'as of', 'date current', 'data current']);
+const LOOKUP_EXCHANGE_RATE_LABELS: Record<string, keyof ImportedExchangeRates> = {
+  'usd hkd': 'exg_rate',
+  'usd aud': 'aud_exg',
+  'usd sg': 'sg_exg',
+  'usd sgd': 'sg_exg',
+};
+
+export const parseLookupExchangeRates = (sheet: XLSX.WorkSheet): ImportedExchangeRates | undefined => {
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
+  const rates: ImportedExchangeRates = {};
+
+  for (const row of rows.slice(0, 20)) {
+    for (let columnIndex = 0; columnIndex < row.length - 1; columnIndex++) {
+      const key = LOOKUP_EXCHANGE_RATE_LABELS[normalizeWorkbookLabel(row[columnIndex])];
+      if (!key) continue;
+
+      const rawValue = row[columnIndex + 1];
+      if (!hasCellValue(rawValue)) continue;
+      const rate = parseNumeric(rawValue);
+      if (Number.isFinite(rate) && rate > 0) rates[key] = rate;
+    }
+  }
+
+  return Object.keys(rates).length > 0 ? rates : undefined;
+};
 
 const parseInlineLookupDate = (val: any): string | undefined => {
   const text = String(val ?? '').trim();
@@ -485,8 +513,10 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         const lookupSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'lookup');
         let stocks: StockData[] = [];
         let lookupDate: string | undefined;
+        let exchangeRates: ImportedExchangeRates | undefined;
         if (lookupSheetName) {
             const sheet = workbook.Sheets[lookupSheetName];
+            exchangeRates = parseLookupExchangeRates(sheet);
             const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
             let headerRowIndex = -1;
             for (let i = 0; i < jsonData.length; i++) {
@@ -938,7 +968,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
           }
         }
 
-        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, portfolioCashPosition, reportDate, benchmark: benchmarkResult, warnings });
+        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, portfolioCashPosition, reportDate, exchangeRates, benchmark: benchmarkResult, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);
