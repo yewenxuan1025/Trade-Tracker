@@ -55,6 +55,26 @@ export interface TransactionData {
   class?: string;
 }
 
+export type TradeEventAssetType = 'Stock' | 'Option';
+export type TradeEventRecordStatus = 'Recorded' | 'Superseded' | 'Deleted';
+export type TradeEventOrigin = 'Transaction' | 'P&L Reconstruction' | 'Excel Import';
+
+/**
+ * Permanent execution ledger entry.
+ *
+ * Holdings transactions may later be removed when they are paired into a P&L
+ * record. Trading History retains the original execution so historical analysis
+ * does not depend on whether a position is still open.
+ */
+export interface TradeEventData extends TransactionData {
+  assetType: TradeEventAssetType;
+  recordStatus: TradeEventRecordStatus;
+  eventOrigin: TradeEventOrigin;
+  linkedPnlId?: string;
+  linkedPnlTradeNumber?: number;
+  parentEventId?: string;
+}
+
 export interface PnLData {
   id: string;
   tradeNumber?: number; // 'No.' from Excel
@@ -249,6 +269,44 @@ export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Exercise': 'exercise'
 };
 
+export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
+  'Event ID': 'id',
+  'Transaction ID': 'id',
+  'Asset Type': 'assetType',
+  'Stock': 'stock',
+  'Name': 'name',
+  'Market': 'market',
+  'Action': 'action',
+  'Price': 'price',
+  'Shares': 'shares',
+  'Date': 'date',
+  'Commission': 'commission',
+  'Total': 'total',
+  'Source': 'source',
+  'Last Price': 'lastPrice',
+  'Last MV': 'lastMv',
+  'Option': 'option',
+  'Expiration': 'expiration',
+  'Strike': 'strike',
+  'Exercise': 'exercise',
+  'Record Status': 'recordStatus',
+  'Event Origin': 'eventOrigin',
+  'Linked P&L ID': 'linkedPnlId',
+  'Linked P&L No.': 'linkedPnlTradeNumber',
+  'Parent Event ID': 'parentEventId',
+  'Assignment Type': 'assignmentType',
+  'Assignment Source': 'assignmentSource',
+  'Linked Option Transaction IDs': 'linkedOptionTransactionIds',
+  'Linked Option P&L ID': 'linkedOptionPnlId',
+  'Linked Option P&L No.': 'linkedOptionPnlTradeNumber',
+  'Assignment Option Type': 'assignmentOptionType',
+  'Assignment Strike': 'assignmentStrike',
+  'Assignment Date': 'assignmentDate',
+  'Type': 'type',
+  'Category': 'category',
+  'Class': 'class',
+};
+
 export const PNL_HEADER_MAP: Record<string, string> = {
   'P&L ID': 'id',
   'No.': 'tradeNumber',
@@ -288,6 +346,8 @@ export const PNL_HEADER_MAP: Record<string, string> = {
   'Linked Option P&L No.': 'linkedOptionPnlTradeNumber',
   'Linked Stock Transaction ID': 'linkedStockTransactionId',
   'Linked Stock P&L ID': 'linkedStockPnlId',
+  'Buy Transaction ID': 'buyTransactionId',
+  'Sell Transaction ID': 'sellTransactionId',
   'Strike': 'strike',
   'Expiration': 'expiration'
 };

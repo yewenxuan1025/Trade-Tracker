@@ -21,6 +21,8 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
+        env:
+          VITE_AI_PROXY_URL: ${{ vars.VITE_AI_PROXY_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

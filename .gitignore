@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Private trading records and generated reconciliation outputs
+Trading History/
+outputs/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

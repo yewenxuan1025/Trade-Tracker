@@ -41,7 +41,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcess, isLoading, onCan
             <div className="flex justify-between items-start mb-6">
                 <div>
                     <h2 className="text-2xl font-bold text-slate-800">Upload Data File</h2>
-                    <p className="text-slate-500 mt-1">Select an Excel file containing your Lookup, Transaction, and P&L data.</p>
+                    <p className="text-slate-500 mt-1">Select an Excel snapshot containing your Lookup, Transaction, P&L, and optional Trading History data.</p>
                 </div>
                 {onCancel && (
                     <button 
@@ -88,7 +88,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcess, isLoading, onCan
                     </h3>
                     <p className="text-slate-500 mt-2 max-w-xs mx-auto">
                     Supports .xlsx and .xls files. 
-                    Sheets should be named "Lookup", "Transaction", and "P&L".
+                    Supported sheets include "Lookup", "Transaction", "P&L", and "Trading History".
                     </p>
                 </div>
                 

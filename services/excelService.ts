@@ -1,6 +1,6 @@
 
 import * as XLSX from 'xlsx';
-import { LookupSheetData, StockData, TransactionData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from '../types';
+import { LookupSheetData, StockData, TransactionData, TradeEventData, PnLData, EXCEL_HEADER_MAP, TRANSACTION_HEADER_MAP, OPTION_HEADER_MAP, TRADE_EVENT_HEADER_MAP, PNL_HEADER_MAP, NAV_HEADER_MAP, MarketConstants, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from '../types';
 
 /**
  * Robust ID generator
@@ -110,11 +110,39 @@ const TRANSACTION_NUMERIC_KEYS: (keyof TransactionData)[] = [
     'linkedOptionPnlTradeNumber', 'assignmentStrike'
 ];
 const TRANSACTION_ARRAY_KEYS: (keyof TransactionData)[] = ['linkedOptionTransactionIds'];
+const TRADE_EVENT_NUMERIC_KEYS = new Set<keyof TradeEventData>([
+    ...TRANSACTION_NUMERIC_KEYS,
+    'linkedPnlTradeNumber',
+]);
+const TRADE_EVENT_ARRAY_KEYS = new Set<keyof TradeEventData>(TRANSACTION_ARRAY_KEYS);
 
 const parseIdList = (value: unknown): string[] => String(value || '')
     .split(',')
     .map(id => id.trim())
     .filter(Boolean);
+
+const createImportedTradeEventId = (event: Partial<TradeEventData>, rowIndex: number): string => {
+  const source = [
+    event.assetType,
+    event.stock,
+    event.date,
+    event.action,
+    event.price,
+    event.shares,
+    event.commission,
+    event.source,
+    event.option,
+    event.expiration,
+    event.strike,
+    rowIndex,
+  ].join('|');
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `trade-event-${(hash >>> 0).toString(36)}`;
+};
 const TWO_DECIMAL_KEYS: (keyof StockData)[] = ['dividendYield', 'roeTTM', 'psQuantile', 'pb', 'closePrice', 'peTTM'];
 const NAV_NUMERIC_KEYS: (keyof NavData)[] = ['aum', 'nav1', 'cumulativeReturn', 'shares', 'nav2', 'cashFlow'];
 
@@ -182,6 +210,43 @@ const OPTION_EXPORT_MAP: Record<string, string> = {
     exercise: 'Exercise'
 };
 
+const TRADE_EVENT_EXPORT_MAP: Record<string, string> = {
+    id: 'Event ID',
+    assetType: 'Asset Type',
+    stock: 'Stock',
+    name: 'Name',
+    market: 'Market',
+    action: 'Action',
+    price: 'Price',
+    shares: 'Shares',
+    date: 'Date',
+    commission: 'Commission',
+    total: 'Total',
+    source: 'Source',
+    lastPrice: 'Last Price',
+    lastMv: 'Last MV',
+    option: 'Option',
+    expiration: 'Expiration',
+    strike: 'Strike',
+    exercise: 'Exercise',
+    recordStatus: 'Record Status',
+    eventOrigin: 'Event Origin',
+    linkedPnlId: 'Linked P&L ID',
+    linkedPnlTradeNumber: 'Linked P&L No.',
+    parentEventId: 'Parent Event ID',
+    assignmentType: 'Assignment Type',
+    assignmentSource: 'Assignment Source',
+    linkedOptionTransactionIds: 'Linked Option Transaction IDs',
+    linkedOptionPnlId: 'Linked Option P&L ID',
+    linkedOptionPnlTradeNumber: 'Linked Option P&L No.',
+    assignmentOptionType: 'Assignment Option Type',
+    assignmentStrike: 'Assignment Strike',
+    assignmentDate: 'Assignment Date',
+    type: 'Type',
+    category: 'Category',
+    class: 'Class',
+};
+
 const PNL_EXPORT_MAP: Record<string, string> = {
     id: 'P&L ID',
     tradeNumber: 'No.',
@@ -215,6 +280,8 @@ const PNL_EXPORT_MAP: Record<string, string> = {
     linkedOptionPnlTradeNumber: 'Linked Option P&L No.',
     linkedStockTransactionId: 'Linked Stock Transaction ID',
     linkedStockPnlId: 'Linked Stock P&L ID',
+    buyTransactionId: 'Buy Transaction ID',
+    sellTransactionId: 'Sell Transaction ID',
     returnPercent: 'Return %',
     holdingDays: 'Holding Days',
     year: 'Year',
@@ -250,6 +317,7 @@ export interface ParseResult {
   lookup: LookupSheetData;
   transactions: TransactionData[];
   optionTransactions: TransactionData[];
+  tradeEvents: TradeEventData[];
   pnl: PnLData[];
   navData: NavData[];
   dividends: DividendData[];
@@ -349,9 +417,18 @@ const parsePortfolioCashPosition = (workbook: XLSX.WorkBook): number | undefined
   return undefined;
 };
 
-const parseReportDate = (workbook: XLSX.WorkBook): string | undefined => {
+const REPORT_EXCHANGE_RATE_LABELS: Record<string, keyof ImportedExchangeRates> = {
+  'hkd exg rate': 'exg_rate',
+  'hkd exchange rate': 'exg_rate',
+  'aud exg rate': 'aud_exg',
+  'aud exchange rate': 'aud_exg',
+  'sgd exg rate': 'sg_exg',
+  'sgd exchange rate': 'sg_exg',
+};
+
+const parseReportInfo = (workbook: XLSX.WorkBook): { reportDate?: string; exchangeRates?: ImportedExchangeRates } => {
   const sheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'report info');
-  if (!sheetName) return undefined;
+  if (!sheetName) return {};
 
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }) as any[][];
@@ -371,16 +448,29 @@ const parseReportDate = (workbook: XLSX.WorkBook): string | undefined => {
     }
   }
 
+  let reportDate: string | undefined;
+  const exchangeRates: ImportedExchangeRates = {};
   for (let i = Math.max(headerRowIndex + 1, 0); i < rows.length; i++) {
     const row = rows[i] || [];
-    if (normalizeWorkbookLabel(row[metricCol]) !== 'report date') continue;
-
+    const metric = normalizeWorkbookLabel(row[metricCol]);
     const rawValue = hasCellValue(row[valueCol]) ? row[valueCol] : row[metricCol + 1];
-    if (!hasCellValue(rawValue)) return undefined;
-    return parseExcelDate(rawValue);
+    if (!hasCellValue(rawValue)) continue;
+
+    if (metric === 'report date') {
+      reportDate = parseExcelDate(rawValue);
+      continue;
+    }
+
+    const key = REPORT_EXCHANGE_RATE_LABELS[metric];
+    if (!key) continue;
+    const rate = parseNumeric(rawValue);
+    if (Number.isFinite(rate) && rate > 0) exchangeRates[key] = rate;
   }
 
-  return undefined;
+  return {
+    reportDate,
+    exchangeRates: Object.keys(exchangeRates).length > 0 ? exchangeRates : undefined,
+  };
 };
 
 /** Parse the "Benchmark Indicies" Excel file (4 metadata rows, then Date + N index columns) */
@@ -507,16 +597,18 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
         const workbook = XLSX.read(data, { type: 'array' });
         const warnings: string[] = [];
         const portfolioCashPosition = parsePortfolioCashPosition(workbook);
-        const reportDate = parseReportDate(workbook);
+        const reportInfo = parseReportInfo(workbook);
+        const reportDate = reportInfo.reportDate;
+        let exchangeRates = reportInfo.exchangeRates;
 
         // --- PARSE LOOKUP SHEET ---
         const lookupSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'lookup');
         let stocks: StockData[] = [];
         let lookupDate: string | undefined;
-        let exchangeRates: ImportedExchangeRates | undefined;
         if (lookupSheetName) {
             const sheet = workbook.Sheets[lookupSheetName];
-            exchangeRates = parseLookupExchangeRates(sheet);
+            const lookupExchangeRates = parseLookupExchangeRates(sheet);
+            if (lookupExchangeRates) exchangeRates = { ...(exchangeRates || {}), ...lookupExchangeRates };
             const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
             let headerRowIndex = -1;
             for (let i = 0; i < jsonData.length; i++) {
@@ -730,6 +822,82 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
             optionTransactions.sort((a, b) => (a.stock || '').localeCompare(b.stock || '') || (a.date || '').localeCompare(b.date || ''));
         }
 
+        // --- PARSE PERMANENT TRADING HISTORY LEDGER ---
+        const tradeEventsSheetName = workbook.SheetNames.find(name => {
+            const normalized = name.trim().toLowerCase().replace(/[_-]+/g, ' ');
+            return normalized === 'trading history' || normalized === 'trade events' || normalized === 'trade event';
+        });
+        let tradeEvents: TradeEventData[] = [];
+        if (tradeEventsSheetName) {
+            const sheet = workbook.Sheets[tradeEventsSheetName];
+            const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+            let headerRowIndex = -1;
+            for (let i = 0; i < jsonData.length; i++) {
+                const row = jsonData[i] || [];
+                if (row.some(cell => typeof cell === 'string' && ['Event ID', 'Transaction ID', 'Asset Type'].includes(cell.trim()))) {
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+
+            if (headerRowIndex !== -1) {
+                const headers = jsonData[headerRowIndex].map(header => String(header).trim());
+                const columnMap: Record<number, keyof TradeEventData> = {};
+                headers.forEach((header, index) => {
+                    const matched = Object.entries(TRADE_EVENT_HEADER_MAP)
+                        .find(([excelHeader]) => header.toLowerCase() === excelHeader.toLowerCase());
+                    if (matched) columnMap[index] = matched[1];
+                    else if (header) warnings.push(`Trading History sheet: unrecognized column "${header}"`);
+                });
+
+                for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+                    const row = jsonData[i];
+                    if (!row || row.length === 0) continue;
+                    const event: Partial<TradeEventData> = {};
+                    Object.entries(columnMap).forEach(([colIndex, key]) => {
+                        const value = row[Number(colIndex)];
+                        if (key === 'date' || key === 'expiration' || key === 'assignmentDate') {
+                            (event as any)[key] = parseExcelDate(value);
+                        } else if (TRADE_EVENT_NUMERIC_KEYS.has(key)) {
+                            (event as any)[key] = parseNumeric(value);
+                        } else if (TRADE_EVENT_ARRAY_KEYS.has(key)) {
+                            (event as any)[key] = parseIdList(value);
+                        } else {
+                            (event as any)[key] = value !== undefined ? String(value) : '';
+                        }
+                    });
+
+                    if (!event.stock && !event.date && !event.action) continue;
+                    const inferredAssetType = event.option && /call|put/i.test(event.option) ? 'Option' : 'Stock';
+                    event.assetType = String(event.assetType || '').toLowerCase() === 'option' ? 'Option' : inferredAssetType;
+                    event.recordStatus = ['Recorded', 'Superseded', 'Deleted'].includes(String(event.recordStatus))
+                        ? event.recordStatus
+                        : 'Recorded';
+                    event.eventOrigin = ['Transaction', 'P&L Reconstruction', 'Excel Import'].includes(String(event.eventOrigin))
+                        ? event.eventOrigin
+                        : 'Excel Import';
+                    event.stock = padHkTicker(String(event.stock || ''), String(event.market || ''));
+                    event.id = String(event.id || createImportedTradeEventId(event, i));
+                    event.name = String(event.name || event.stock || '');
+                    event.market = String(event.market || '');
+                    event.action = String(event.action || '');
+                    event.price = event.price || 0;
+                    event.shares = event.shares || 0;
+                    event.date = event.date || '';
+                    event.commission = event.commission || 0;
+                    event.total = event.total || 0;
+                    event.source = String(event.source || '');
+                    event.lastPrice = event.lastPrice || 0;
+                    event.lastMv = event.lastMv || 0;
+                    event.option = String(event.option || '');
+                    event.expiration = event.expiration || '';
+                    event.strike = event.strike || 0;
+                    tradeEvents.push(event as TradeEventData);
+                }
+                tradeEvents.sort((a, b) => (a.date || '').localeCompare(b.date || '') || String(a.id).localeCompare(String(b.id)));
+            }
+        }
+
         // --- PARSE EXPORTED P&L SHEETS ---
         const stockPnlSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'stock realized p&l');
         const optionPnlSheetName = workbook.SheetNames.find(name => name.trim().toLowerCase() === 'option realized p&l');
@@ -773,6 +941,8 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
                     linkedOptionPnlTradeNumber: hasCellValue(row['Linked Option P&L No.']) ? parseNumeric(row['Linked Option P&L No.']) : undefined,
                     linkedStockTransactionId: hasCellValue(row['Linked Stock Transaction ID']) ? String(row['Linked Stock Transaction ID']) : undefined,
                     linkedStockPnlId: hasCellValue(row['Linked Stock P&L ID']) ? String(row['Linked Stock P&L ID']) : undefined,
+                    buyTransactionId: hasCellValue(row['Buy Transaction ID']) ? String(row['Buy Transaction ID']) : undefined,
+                    sellTransactionId: hasCellValue(row['Sell Transaction ID']) ? String(row['Sell Transaction ID']) : undefined,
                     returnPercent: parseNumeric(row['Return %']),
                     holdingDays: parseNumeric(row['Holding Days']),
                     year: parseNumeric(row['Year']),
@@ -968,7 +1138,7 @@ export const parseExcelFile = async (file: File): Promise<ParseResult> => {
           }
         }
 
-        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, pnl: pnlData, navData, dividends, interest, cashLedger, portfolioCashPosition, reportDate, exchangeRates, benchmark: benchmarkResult, warnings });
+        resolve({ lookup: { stocks, lastUpdated: new Date(), lookupDate }, transactions, optionTransactions, tradeEvents, pnl: pnlData, navData, dividends, interest, cashLedger, portfolioCashPosition, reportDate, exchangeRates, benchmark: benchmarkResult, warnings });
       } catch (error) { reject(error); }
     };
     reader.onerror = (error) => reject(error);
@@ -1019,6 +1189,18 @@ export const exportTransactionsToExcel = (transactions: TransactionData[], optio
       XLSX.utils.book_append_sheet(workbook, optWorksheet, "Transactions_Option");
   }
 
+  XLSX.writeFile(workbook, fileName);
+};
+
+export const exportTradeEventsToExcel = (tradeEvents: TradeEventData[], fileName: string = 'TradingHistory.xlsx') => {
+  const workbook = XLSX.utils.book_new();
+  const mappedEvents = mapToExport(tradeEvents, TRADE_EVENT_EXPORT_MAP);
+  const worksheet = XLSX.utils.json_to_sheet(
+    mappedEvents,
+    mappedEvents.length > 0 ? undefined : { header: Object.values(TRADE_EVENT_EXPORT_MAP) },
+  );
+  formatWorksheet(worksheet, mappedEvents);
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Trading History');
   XLSX.writeFile(workbook, fileName);
 };
 
@@ -1331,6 +1513,7 @@ export const exportGlobalData = (
     dividends: DividendData[] = [],
     interest: InterestData[] = [],
     cashLedger: CashLedgerEntry[] = [],
+    tradeEvents: TradeEventData[] = [],
     fileName: string = 'TradeTracker_Pro_Export.xlsx',
     benchmarkData: BenchmarkData = []
 ) => {
@@ -1456,7 +1639,9 @@ export const exportGlobalData = (
     XLSX.utils.book_append_sheet(workbook, summaryWs, "Portfolio Summary");
 
     // 1. INFO
+    const snapshotVersion = (fileName.split(/[\\/]/).pop() || fileName).replace(/\.xlsx$/i, '');
     const metricsData = [
+        { Metric: 'Snapshot Version', Value: snapshotVersion },
         { Metric: 'Report Date', Value: marketConstants.date },
         { Metric: 'HKD Exg Rate', Value: marketConstants.exg_rate },
         { Metric: 'AUD Exg Rate', Value: marketConstants.aud_exg },
@@ -1538,6 +1723,14 @@ export const exportGlobalData = (
         const optTxnWs = XLSX.utils.json_to_sheet(mappedOptTxns);
         formatWorksheet(optTxnWs, mappedOptTxns);
         XLSX.utils.book_append_sheet(workbook, optTxnWs, "Transactions_Option");
+    }
+
+    // 4.2 PERMANENT TRADE EVENTS LEDGER
+    if (tradeEvents.length > 0) {
+        const mappedEvents = mapToExport(tradeEvents, TRADE_EVENT_EXPORT_MAP);
+        const tradeEventsWs = XLSX.utils.json_to_sheet(mappedEvents);
+        formatWorksheet(tradeEventsWs, mappedEvents);
+        XLSX.utils.book_append_sheet(workbook, tradeEventsWs, "Trading History");
     }
 
     // 5. P&L (SPLIT)
