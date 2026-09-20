@@ -10,8 +10,8 @@ A comprehensive React-based application for tracking stock and options portfolio
 - **NAV Tracking**: Monitor Net Asset Value over time, including AUM, shares, and cumulative returns.
 - **Historical Analysis**: Analyze past performance with the History Dashboard.
 - **Permanent Trading History Ledger**: Preserve executions after Holdings records are paired into realized P&L, with standalone Excel import/export and date-range filtering.
-- **AI Trading Analysis**: Review a selected period with OpenAI, Anthropic, or Volcano Engine models, optionally including uploaded market context and provider-supported news search. The app sends every selected execution and realized P&L record without a fixed transaction-count cap.
-- **Excel Integration**: Import and export data (Lookup, Transactions, Options, Trading History, P&L, NAV) directly to and from Excel files (`.xlsx`). Full snapshots use the `TradeTracker_Record_YYYYMMDD.xlsx` naming convention.
+- **Trade Event Allocations**: Inspect the audit links between original broker executions and the buy/sell legs used in realized P&L without splitting the raw Trading History rows.
+- **Excel Integration**: Import and export data (Lookup, Transactions, Options, Trading History, Trade Event Allocations, P&L, NAV) directly to and from Excel files (`.xlsx`). Full snapshots use the `TradeTracker_Record_YYYYMMDD.xlsx` naming convention.
 - **Browser Persistence**: Core data is saved in `localStorage`; the larger Trading History ledger is stored in IndexedDB.
 - **Multi-Currency Support**: Handles different markets (US, HK, SG, AUS) with configurable exchange rates to standardize metrics into USD.
 
@@ -26,14 +26,13 @@ The application is built using React, TypeScript, and Tailwind CSS.
   - `StockTable.tsx`: Displays current stock holdings and lookup data.
   - `TransactionTable.tsx`: Manages the ledger of stock and option trades.
   - `TradeEventsTable.tsx`: Displays and imports/exports the permanent execution ledger.
-  - `TradingAnalysis.tsx`: Combines session-only AI analysis with the permanent Trading History table.
+  - `TradingHistoryWorkspace.tsx`: Switches between the permanent Trading History and P&L allocation audit views.
+  - `TradeEventAllocationsTable.tsx`: Displays allocation links, filters, and missing-event checks.
   - `PnLTable.tsx`: Shows realized profit and loss records with advanced filtering.
   - `HistoryDashboard.tsx`: Visualizes historical trading performance.
   - `NavDashboard.tsx`: Tracks and displays Net Asset Value data.
   - `FileUpload.tsx`: Handles Excel file uploads.
 - `src/services/excelService.ts`: The core business logic layer. It handles parsing incoming Excel files, matching trades to calculate P&L, performing portfolio analysis, and generating Excel files for export.
-- `src/services/aiAnalysis.ts`: Builds the complete selected-period analysis payload and sends it to the configured AI gateway.
-- `worker/ai-analysis-worker.js`: Optional Cloudflare Worker gateway for shared or per-request provider API keys.
 - `src/types.ts`: Defines the TypeScript interfaces and constants used throughout the application, ensuring type safety.
 
 ## Data Structure
@@ -66,6 +65,12 @@ Retains every stock and option execution independently of its current Holdings/P
 - `assetType`, `recordStatus`, `eventOrigin`
 - Optional P&L and split lineage fields
 
+### `TradeEventAllocationData`
+Links part or all of a raw trade event to one realized P&L leg.
+- `tradeEventId`, `pnlId`, `pnlTradeNumber`, `leg`
+- Allocated price, shares, commission, and total
+- Allocation source and audit date
+
 ### `NavData`
 Tracks the fund's performance over time.
 - `date`, `aum`, `nav1`, `cumulativeReturn`, `shares`, `nav2`
@@ -97,16 +102,10 @@ Stores global settings.
 2. **Import Data**: Use the "Upload" button to import your existing Excel tracking sheets. The app expects specific column headers (mapped in `types.ts`).
 3. **Manage Trades**: View and edit your transactions in the "Transactions" tab.
 4. **Analyze Performance**: Check the "Realized P&L" and "History" tabs to review your trading performance.
-5. **Trading Analysis**: Generate a session-only AI review in the upper section, then inspect, filter, upload, or export Trading History below it.
+5. **Trading History**: Inspect raw trade events and switch to the P&L Allocations view to audit each linked buy/sell leg.
 6. **Export**: Use "Export All Data" to download a dated `TradeTracker_Record_YYYYMMDD.xlsx` snapshot.
 
-### AI gateway configuration
-
-Because the frontend is hosted on GitHub Pages, shared provider keys must not be embedded in the frontend bundle. Deploy the gateway template in `worker/ai-analysis-worker.js`, configure its provider secrets, and set `VITE_AI_PROXY_URL` when building the frontend. See `worker/README.md` for the required variables.
-
-AI reports, personal API keys, model choices, and gateway settings are held only in component memory. They are not written to `localStorage`, IndexedDB, or Excel exports.
-
-The model selector groups the current two general-purpose model generations for each provider and also accepts a custom model ID. Provider context-window, rate, access, and billing limits still apply to individual requests.
+The built application has no runtime API, model, font, CDN, or webpage dependency. All application code and styles are bundled locally; Excel files and browser storage remain the only data inputs.
 
 ## Technologies Used
 - **React 18**: UI Library

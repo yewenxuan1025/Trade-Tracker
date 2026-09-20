@@ -50,6 +50,7 @@ export interface TransactionData {
   assignmentOptionType?: 'Call' | 'Put';
   assignmentStrike?: number;
   assignmentDate?: string;
+  rawTradeEventId?: string;
   type?: string;
   category?: string;
   class?: string;
@@ -70,9 +71,38 @@ export interface TradeEventData extends TransactionData {
   assetType: TradeEventAssetType;
   recordStatus: TradeEventRecordStatus;
   eventOrigin: TradeEventOrigin;
+  /**
+   * Legacy direct P&L link fields. New pairings should be stored in
+   * TradeEventAllocationData so raw broker executions can stay intact.
+   */
   linkedPnlId?: string;
   linkedPnlTradeNumber?: number;
   parentEventId?: string;
+}
+
+export type TradeEventAllocationLeg = 'Buy' | 'Sell';
+export type TradeEventAllocationSource = 'P&L Pairing' | 'P&L Reconstruction' | 'Legacy Link' | 'Excel Import';
+
+export interface TradeEventAllocationData {
+  id: string;
+  tradeEventId: string;
+  pnlId: string;
+  pnlTradeNumber?: number;
+  assetType: TradeEventAssetType;
+  leg: TradeEventAllocationLeg;
+  stock: string;
+  name?: string;
+  market?: string;
+  option?: string;
+  expiration?: string;
+  strike?: number;
+  allocatedShares: number;
+  allocatedPrice: number;
+  allocatedCommission: number;
+  allocatedTotal: number;
+  allocationDate: string;
+  source: string;
+  allocationSource: TradeEventAllocationSource;
 }
 
 export interface PnLData {
@@ -245,6 +275,7 @@ export const TRANSACTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Assignment Option Type': 'assignmentOptionType',
   'Assignment Strike': 'assignmentStrike',
   'Assignment Date': 'assignmentDate',
+  'Raw Trade Event ID': 'rawTradeEventId',
   'Type': 'type',
   'Category': 'category',
   'Class': 'class'
@@ -266,7 +297,8 @@ export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Option': 'option',
   'Expiration': 'expiration',
   'Strike': 'strike',
-  'Exercise': 'exercise'
+  'Exercise': 'exercise',
+  'Raw Trade Event ID': 'rawTradeEventId'
 };
 
 export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
@@ -293,6 +325,7 @@ export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
   'Event Origin': 'eventOrigin',
   'Linked P&L ID': 'linkedPnlId',
   'Linked P&L No.': 'linkedPnlTradeNumber',
+  'Raw Trade Event ID': 'rawTradeEventId',
   'Parent Event ID': 'parentEventId',
   'Assignment Type': 'assignmentType',
   'Assignment Source': 'assignmentSource',
@@ -305,6 +338,29 @@ export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
   'Type': 'type',
   'Category': 'category',
   'Class': 'class',
+};
+
+export const TRADE_EVENT_ALLOCATION_HEADER_MAP: Record<string, keyof TradeEventAllocationData> = {
+  'Allocation ID': 'id',
+  'Trade Event ID': 'tradeEventId',
+  'Event ID': 'tradeEventId',
+  'P&L ID': 'pnlId',
+  'P&L No.': 'pnlTradeNumber',
+  'Asset Type': 'assetType',
+  'Leg': 'leg',
+  'Stock': 'stock',
+  'Name': 'name',
+  'Market': 'market',
+  'Option': 'option',
+  'Expiration': 'expiration',
+  'Strike': 'strike',
+  'Allocated Shares': 'allocatedShares',
+  'Allocated Price': 'allocatedPrice',
+  'Allocated Commission': 'allocatedCommission',
+  'Allocated Total': 'allocatedTotal',
+  'Allocation Date': 'allocationDate',
+  'Source': 'source',
+  'Allocation Source': 'allocationSource',
 };
 
 export const PNL_HEADER_MAP: Record<string, string> = {

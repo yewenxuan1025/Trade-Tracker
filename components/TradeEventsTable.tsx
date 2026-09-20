@@ -1,12 +1,11 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Archive, CalendarDays, Download, Search, Upload } from 'lucide-react';
-import { TradeEventData } from '../types';
+import React, { useMemo, useState } from 'react';
+import { Archive, CalendarDays, Search } from 'lucide-react';
+import { TradeEventAllocationData, TradeEventData } from '../types';
 
 interface TradeEventsTableProps {
   events: TradeEventData[];
+  allocations: TradeEventAllocationData[];
   asOfDate?: string;
-  onUpload: (file: File) => void;
-  onExport: () => void;
 }
 
 type DateFilter = 'All' | 'Week' | 'Month' | 'Year' | 'Custom';
@@ -33,14 +32,13 @@ const shiftUtcMonths = (date: Date, months: number): Date => {
   return shifted;
 };
 
-const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, asOfDate, onUpload, onExport }) => {
+const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, allocations, asOfDate }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [assetType, setAssetType] = useState<'All' | 'Stock' | 'Option'>('All');
   const [recordStatus, setRecordStatus] = useState<'All' | TradeEventData['recordStatus']>('All');
   const [dateFilter, setDateFilter] = useState<DateFilter>('All');
   const [customFromDate, setCustomFromDate] = useState('');
   const [customToDate, setCustomToDate] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const referenceDate = useMemo(() => {
     const configured = parseDateOnly(asOfDate);
@@ -65,6 +63,34 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, asOfDate, o
     return { start: '', end: '' };
   }, [customFromDate, customToDate, dateFilter, referenceDate]);
 
+  const pnlLinksByEventId = useMemo(() => {
+    const map = new Map<string, { label: string; title: string }>();
+    const grouped = new Map<string, TradeEventAllocationData[]>();
+    allocations.forEach(allocation => {
+      const id = String(allocation.tradeEventId || '');
+      if (!id) return;
+      grouped.set(id, [...(grouped.get(id) || []), allocation]);
+    });
+
+    grouped.forEach((group, eventId) => {
+      const numbers = Array.from(new Set(group
+        .map(allocation => allocation.pnlTradeNumber)
+        .filter((value): value is number => value !== undefined && value !== null && !Number.isNaN(Number(value)))
+        .map(value => Number(value))))
+        .sort((left, right) => left - right);
+      const ids = Array.from(new Set(group.map(allocation => allocation.pnlId).filter(Boolean)));
+      map.set(eventId, {
+        label: numbers.length > 0 ? numbers.map(value => `#${value}`).join(', ') : ids.length > 0 ? `${ids.length} link${ids.length > 1 ? 's' : ''}` : '',
+        title: group.map(allocation => {
+          const numberLabel = allocation.pnlTradeNumber ? `#${allocation.pnlTradeNumber}` : allocation.pnlId;
+          return `${numberLabel}: ${allocation.leg} ${allocation.allocatedShares} shares, total ${allocation.allocatedTotal}`;
+        }).join('\n'),
+      });
+    });
+
+    return map;
+  }, [allocations]);
+
   const filteredEvents = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
     return [...events]
@@ -83,27 +109,15 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, asOfDate, o
         event.action,
         event.source,
         event.option,
-        event.linkedPnlTradeNumber,
+        pnlLinksByEventId.get(String(event.id))?.label || event.linkedPnlTradeNumber,
       ].some(value => String(value || '').toLowerCase().includes(needle)))
       .sort((a, b) => (b.date || '').localeCompare(a.date || '') || String(b.id).localeCompare(String(a.id)));
-  }, [assetType, dateRange, events, recordStatus, searchTerm]);
+  }, [assetType, dateRange, events, pnlLinksByEventId, recordStatus, searchTerm]);
 
   const recordedCount = events.filter(event => event.recordStatus === 'Recorded').length;
 
   return (
     <div className="flex flex-col h-full min-h-[620px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xlsx,.xls"
-        className="hidden"
-        onChange={event => {
-          const file = event.target.files?.[0];
-          if (file) onUpload(file);
-          event.target.value = '';
-        }}
-      />
-
       <div className="p-5 border-b border-slate-200 flex flex-col gap-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -113,22 +127,6 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, asOfDate, o
             <p className="text-xs text-slate-500 mt-1">
               Permanent trading ledger · {recordedCount} recorded · {events.length} total audit records
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
-            >
-              <Upload size={15} /> Upload History
-            </button>
-            <button
-              type="button"
-              onClick={onExport}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-700"
-            >
-              <Download size={15} /> Export History
-            </button>
           </div>
         </div>
 
@@ -258,7 +256,9 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, asOfDate, o
                     {event.recordStatus}
                   </span>
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-slate-500 text-center">{event.linkedPnlTradeNumber || ''}</td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-500 text-center" title={pnlLinksByEventId.get(String(event.id))?.title || event.linkedPnlId || ''}>
+                  {pnlLinksByEventId.get(String(event.id))?.label || (event.linkedPnlTradeNumber ? `#${event.linkedPnlTradeNumber}` : '')}
+                </td>
                 <td className="px-4 py-3 font-mono text-[10px] text-slate-400 max-w-[180px] truncate" title={String(event.id)}>{event.id}</td>
               </tr>
             ))}

@@ -17,8 +17,8 @@ npm run preview  # Preview production build
 ### Data Flow
 
 ```
-Excel files / screenshots
-    → FileUpload.tsx / geminiService.ts (parse)
+Excel files
+    → FileUpload.tsx / excelService.ts (parse)
     → excelService.ts (transform & calculate)
     → App.tsx (state via useState + localStorage)
     → Dashboard components (display)

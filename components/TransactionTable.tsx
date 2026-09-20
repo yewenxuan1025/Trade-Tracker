@@ -372,7 +372,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
         linkedOptionPnlTradeNumber: isOption ? undefined : form.linkedOptionPnlTradeNumber,
         assignmentOptionType: isOption ? undefined : form.assignmentOptionType,
         assignmentStrike: isOption ? undefined : form.assignmentStrike,
-        assignmentDate: isOption ? undefined : form.assignmentDate
+        assignmentDate: isOption ? undefined : form.assignmentDate,
+        rawTradeEventId: form.rawTradeEventId,
       };
       
       if (isOption) {
@@ -799,4 +800,4 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   );
 };
 
-export default TransactionTable;
+export default TransactionTable;

@@ -11,12 +11,12 @@ import SummaryDashboard from './components/SummaryDashboard';
 import HistoryDashboard from './components/HistoryDashboard';
 import NavDashboard from './components/NavDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
-import TradingAnalysis from './components/TradingAnalysis';
+import TradingHistoryWorkspace from './components/TradingHistoryWorkspace';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportTradeEventsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis, type ImportedExchangeRates } from './services/excelService';
 import { buildOptionPnlFields, isAssignmentOptionRecord } from './services/optionPnl';
-import { buildTradeEventsFromData, markTradeEvents, mergeTradeEvents, transactionToTradeEvent } from './services/tradeEvents';
-import { loadStoredTradeEvents, saveStoredTradeEvents } from './services/tradeEventStorage';
-import { LookupSheetData, MarketConstants, StockData, TransactionData, TradeEventData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
+import { buildTradeAllocationsFromData, buildTradeEventsFromData, isSplitTransaction, markTradeEvents, mergeTradeAllocations, mergeTradeEvents, reconcileTradeAllocations, removeTradeAllocationsForPnl, tradeEventLinksToAllocations, transactionToTradeAllocation, transactionToTradeEvent } from './services/tradeEvents';
+import { loadStoredTradeAllocations, loadStoredTradeEvents, saveStoredTradeAllocations, saveStoredTradeEvents } from './services/tradeEventStorage';
+import { LookupSheetData, MarketConstants, StockData, TransactionData, TradeEventData, TradeEventAllocationData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
 // Action strings that legacy data stored in PnLData.name instead of PnLData.optionAction.
 // We aggressively detect and move them whether or not the lookup table has a match,
@@ -181,6 +181,7 @@ const App: React.FC = () => {
   });
 
   const [tradeEvents, setTradeEvents] = useState<TradeEventData[]>([]);
+  const [tradeAllocations, setTradeAllocations] = useState<TradeEventAllocationData[]>([]);
   const [isTradeEventStorageReady, setIsTradeEventStorageReady] = useState(false);
 
   const [pnlData, setPnlData] = useState<PnLData[]>(() => {
@@ -296,9 +297,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    loadStoredTradeEvents()
-      .then(storedEvents => {
-        if (!cancelled) setTradeEvents(prev => mergeTradeEvents(storedEvents, prev));
+    Promise.all([loadStoredTradeEvents(), loadStoredTradeAllocations()])
+      .then(([storedEvents, storedAllocations]) => {
+        if (cancelled) return;
+        setTradeEvents(prev => mergeTradeEvents(storedEvents, prev));
+        setTradeAllocations(prev => mergeTradeAllocations(
+          mergeTradeAllocations(tradeEventLinksToAllocations(storedEvents), storedAllocations),
+          prev,
+        ));
       })
       .catch(error => console.error('Unable to load Trading History from IndexedDB', error))
       .finally(() => {
@@ -313,15 +319,32 @@ const App: React.FC = () => {
       .catch(error => console.error('Unable to save Trading History to IndexedDB', error));
   }, [isTradeEventStorageReady, tradeEvents]);
 
-  // Keep a permanent execution ledger in sync with current transactions and
-  // reconstruct older closed trades from P&L data. Existing ledger rows are
-  // retained even after their Holdings rows are removed.
+  useEffect(() => {
+    if (!isTradeEventStorageReady) return;
+    saveStoredTradeAllocations(tradeAllocations)
+      .catch(error => console.error('Unable to save Trade Event Allocations to IndexedDB', error));
+  }, [isTradeEventStorageReady, tradeAllocations]);
+
+  // Keep a permanent raw execution ledger in sync with current transactions.
+  // P&L links live in tradeAllocations so raw broker executions stay intact.
   useEffect(() => {
     setTradeEvents(prev => mergeTradeEvents(
       prev,
-      buildTradeEventsFromData(transactions, optionTransactions, pnlData),
+      buildTradeEventsFromData(transactions, optionTransactions, pnlData, false),
     ));
-  }, [transactions, optionTransactions, pnlData]);
+  }, [transactions, optionTransactions]);
+
+  useEffect(() => {
+    setTradeAllocations(prev => mergeTradeAllocations(
+      prev,
+      tradeEventLinksToAllocations(tradeEvents),
+    ));
+  }, [tradeEvents]);
+
+  useEffect(() => {
+    if (!isTradeEventStorageReady || tradeEvents.length === 0) return;
+    setTradeAllocations(prev => reconcileTradeAllocations(prev, tradeEvents));
+  }, [isTradeEventStorageReady, tradeEvents, tradeAllocations]);
 
   // Enrich transactions with name/lastPrice from lookupData
   const enrichTransactions = useCallback((txns: TransactionData[], lookup: LookupSheetData | null): TransactionData[] => {
@@ -403,6 +426,13 @@ const App: React.FC = () => {
       const nextTradeEvents = result.tradeEvents.length > 0
         ? result.tradeEvents
         : buildTradeEventsFromData(nextTransactions, nextOptionTransactions, nextPnlData);
+      const nextTradeAllocations = reconcileTradeAllocations(
+        mergeTradeAllocations(
+          result.tradeAllocations,
+          buildTradeAllocationsFromData(nextTransactions, nextOptionTransactions, nextPnlData, nextTradeEvents),
+        ),
+        nextTradeEvents,
+      );
       const nextDividends = result.dividends.length > 0 ? result.dividends : dividendData;
       const nextInterest = result.interest.length > 0 ? result.interest : interestData;
       const nextCashLedger = result.cashLedger.length > 0 ? result.cashLedger : cashLedger;
@@ -411,6 +441,7 @@ const App: React.FC = () => {
       setTransactions(nextTransactions);
       setOptionTransactions(nextOptionTransactions);
       setTradeEvents(nextTradeEvents);
+      setTradeAllocations(nextTradeAllocations);
       setPnlData(nextPnlData);
       setNavData(result.navData);
       // Load benchmark if present in the uploaded file
@@ -498,24 +529,33 @@ const App: React.FC = () => {
           return { stocks: currentStocks, lastUpdated: new Date(), lookupDate: result.lookup?.lookupDate || prev?.lookupDate };
       });
 
+      const incomingTransactions = enrichTransactions(result.transactions, result.lookup || lookupData);
+      const incomingOptionTransactions = enrichOptionTransactions(result.optionTransactions, result.lookup || lookupData);
+      const incomingPnl = enrichPnlRecords(result.pnl, result.lookup.stocks.length > 0 ? result.lookup : lookupData);
+
       // 2. Append Transactions (enrich with uploaded lookup first, fallback to current)
       setTransactions(prev => {
-          const enriched = enrichTransactions(result.transactions, result.lookup || lookupData);
-          return [...prev, ...enriched];
+          return [...prev, ...incomingTransactions];
       });
 
       // 3. Append Option Transactions (enrich names from lookup)
       setOptionTransactions(prev => {
-          const enriched = enrichOptionTransactions(result.optionTransactions, result.lookup || lookupData);
-          return [...prev, ...enriched];
+          return [...prev, ...incomingOptionTransactions];
       });
 
       // 4. Append PnL
-      setPnlData(prev => [...prev, ...enrichPnlRecords(result.pnl, result.lookup.stocks.length > 0 ? result.lookup : lookupData)]);
+      setPnlData(prev => [...prev, ...incomingPnl]);
 
       // 4.1 Merge an explicitly supplied Trading History ledger by Event ID.
       if (result.tradeEvents.length > 0) {
         setTradeEvents(prev => mergeTradeEvents(prev, result.tradeEvents));
+      }
+      const incomingAllocations = mergeTradeAllocations(
+        result.tradeAllocations,
+        buildTradeAllocationsFromData(incomingTransactions, incomingOptionTransactions, incomingPnl, result.tradeEvents),
+      );
+      if (incomingAllocations.length > 0) {
+        setTradeAllocations(prev => mergeTradeAllocations(prev, incomingAllocations));
       }
 
       // 5. Append NAV (deduplicate by date)
@@ -698,9 +738,12 @@ const App: React.FC = () => {
           linkedOptionPnlTradeNumber: assignmentTransaction?.linkedOptionPnlTradeNumber,
       };
 
-      setTradeEvents(prev => mergeTradeEvents(prev, [
-          transactionToTradeEvent(t1, 'Stock', { linkedPnlId: stockPnlId, linkedPnlTradeNumber: nextNo }),
-          transactionToTradeEvent(t2, 'Stock', { linkedPnlId: stockPnlId, linkedPnlTradeNumber: nextNo }),
+      setTradeEvents(prev => mergeTradeEvents(prev, [t1, t2]
+          .filter(transaction => !isSplitTransaction(transaction))
+          .map(transaction => transactionToTradeEvent(transaction, 'Stock'))));
+      setTradeAllocations(prev => mergeTradeAllocations(prev, [
+          transactionToTradeAllocation(t1, 'Stock', newPnl),
+          transactionToTradeAllocation(t2, 'Stock', newPnl),
       ]));
 
       setPnlData(prev => {
@@ -755,13 +798,18 @@ const App: React.FC = () => {
         holdingDays: Math.ceil(Math.abs(new Date(sell.date).getTime() - new Date(buy.date).getTime()) / (1000 * 60 * 60 * 24)),
         assignmentDate: isAssignment ? buy.date : undefined,
         linkedOptionTransactionIds: ids.map(String),
+        buyTransactionId: buy.id,
+        sellTransactionId: sell.id,
         linkedStockTransactionId,
     };
     const newPnl: PnLData = { ...basePnl, ...buildOptionPnlFields(basePnl, lookupData) };
 
-    setTradeEvents(prev => mergeTradeEvents(prev, [
-      transactionToTradeEvent(t1, 'Option', { linkedPnlId: pnlId, linkedPnlTradeNumber: nextNo }),
-      transactionToTradeEvent(t2, 'Option', { linkedPnlId: pnlId, linkedPnlTradeNumber: nextNo }),
+    setTradeEvents(prev => mergeTradeEvents(prev, [t1, t2]
+      .filter(transaction => !isSplitTransaction(transaction))
+      .map(transaction => transactionToTradeEvent(transaction, 'Option'))));
+    setTradeAllocations(prev => mergeTradeAllocations(prev, [
+      transactionToTradeAllocation(t1, 'Option', newPnl),
+      transactionToTradeAllocation(t2, 'Option', newPnl),
     ]));
 
     setPnlData(prev => [...prev, newPnl]);
@@ -836,6 +884,7 @@ const App: React.FC = () => {
         assignmentOptionType: txn.assignmentOptionType,
         assignmentStrike: txn.assignmentStrike,
         assignmentDate: txn.assignmentDate,
+        rawTradeEventId: txn.rawTradeEventId,
     };
     setTransactions(prev => [...prev, newTxn]);
   }, [lookupData]);
@@ -877,21 +926,18 @@ const App: React.FC = () => {
       const splitId1 = generateId() + '_1';
       const splitId2 = generateId() + '_2';
       const original = transactions.find(transaction => String(transaction.id) === String(originalId));
+      const rawTradeEventId = original ? (original.rawTradeEventId || String(original.id)) : String(originalId);
       if (original) {
-          setTradeEvents(prev => mergeTradeEvents(
-              markTradeEvents(prev, [String(originalId)], 'Superseded'),
-              [
-                  transactionToTradeEvent({ ...original, ...s1, id: splitId1 }, 'Stock', { parentEventId: String(originalId) }),
-                  transactionToTradeEvent({ ...original, ...s2, id: splitId2 }, 'Stock', { parentEventId: String(originalId) }),
-              ],
-          ));
+          setTradeEvents(prev => isSplitTransaction(original)
+              ? prev
+              : mergeTradeEvents(prev, [transactionToTradeEvent(original, 'Stock')]));
       }
       setTransactions(prev => {
           const index = prev.findIndex(t => String(t.id) === String(originalId));
           if (index === -1) return prev;
           const original = prev[index];
-          const t1 = { ...original, ...s1, id: splitId1 };
-          const t2 = { ...original, ...s2, id: splitId2 };
+          const t1 = { ...original, ...s1, id: splitId1, rawTradeEventId };
+          const t2 = { ...original, ...s2, id: splitId2, rawTradeEventId };
           const newTxns = [...prev];
           newTxns.splice(index, 1, t1, t2);
           return newTxns;
@@ -911,7 +957,8 @@ const App: React.FC = () => {
         date: txn.date || new Date().toISOString().split('T')[0], commission: txn.commission || 0,
         total: txn.total || 0, source: txn.source || 'IB AUS', lastPrice: 0, lastMv: 0,
         option: txn.option || 'Call', expiration: txn.expiration || '', strike: txn.strike || 0,
-        exercise: txn.exercise || 'No'
+        exercise: txn.exercise || 'No',
+        rawTradeEventId: txn.rawTradeEventId,
     };
     setOptionTransactions(prev => [...prev, newTxn]);
   }, [lookupData]);
@@ -943,21 +990,18 @@ const App: React.FC = () => {
       const splitId1 = generateId() + '_1';
       const splitId2 = generateId() + '_2';
       const original = optionTransactions.find(transaction => String(transaction.id) === String(originalId));
+      const rawTradeEventId = original ? (original.rawTradeEventId || String(original.id)) : String(originalId);
       if (original) {
-          setTradeEvents(prev => mergeTradeEvents(
-              markTradeEvents(prev, [String(originalId)], 'Superseded'),
-              [
-                  transactionToTradeEvent({ ...original, ...s1, id: splitId1 }, 'Option', { parentEventId: String(originalId) }),
-                  transactionToTradeEvent({ ...original, ...s2, id: splitId2 }, 'Option', { parentEventId: String(originalId) }),
-              ],
-          ));
+          setTradeEvents(prev => isSplitTransaction(original)
+              ? prev
+              : mergeTradeEvents(prev, [transactionToTradeEvent(original, 'Option')]));
       }
       setOptionTransactions(prev => {
           const index = prev.findIndex(t => String(t.id) === String(originalId));
           if (index === -1) return prev;
           const original = prev[index];
-          const t1 = { ...original, ...s1, id: splitId1 };
-          const t2 = { ...original, ...s2, id: splitId2 };
+          const t1 = { ...original, ...s1, id: splitId1, rawTradeEventId };
+          const t2 = { ...original, ...s2, id: splitId2, rawTradeEventId };
           const newTxns = [...prev];
           newTxns.splice(index, 1, t1, t2);
           return newTxns;
@@ -1007,6 +1051,7 @@ const App: React.FC = () => {
       setTransactions(prev => prev.map(transaction => transaction.linkedOptionPnlId && idSet.has(transaction.linkedOptionPnlId)
           ? { ...transaction, linkedOptionPnlId: undefined, linkedOptionPnlTradeNumber: undefined }
           : transaction));
+      setTradeAllocations(prev => removeTradeAllocationsForPnl(prev, idsToRemove));
   }, []);
 
   const handleSingleUpload = async (section: string, file: File) => {
@@ -1019,14 +1064,30 @@ const App: React.FC = () => {
         }
         else if (section === 'option_transaction') setOptionTransactions(enrichOptionTransactions(result.optionTransactions, lookupData));
         else if (section === 'trade_events') {
-            if (result.tradeEvents.length === 0) {
-              showToast('No Trading History sheet found in the selected workbook', 'info');
+            const incomingAllocations = mergeTradeAllocations(
+              result.tradeAllocations,
+              buildTradeAllocationsFromData([], [], [], result.tradeEvents),
+            );
+            if (result.tradeEvents.length === 0 && incomingAllocations.length === 0) {
+              showToast('No Trading History or Trade Event Allocations sheet found in the selected workbook', 'info');
             } else {
+              if (result.tradeEvents.length > 0) {
               setTradeEvents(prev => mergeTradeEvents(prev, result.tradeEvents));
-              showToast(`Merged ${result.tradeEvents.length} Trading History records by Event ID`, 'success');
+              }
+              if (incomingAllocations.length > 0) {
+                setTradeAllocations(prev => mergeTradeAllocations(prev, incomingAllocations));
+              }
+              showToast(`Merged ${result.tradeEvents.length} Trading History records and ${incomingAllocations.length} allocations`, 'success');
             }
         }
-        else if (section === 'pnl') setPnlData(enrichPnlRecords(result.pnl, lookupData));
+        else if (section === 'pnl') {
+            const nextPnl = enrichPnlRecords(result.pnl, lookupData);
+            setPnlData(nextPnl);
+            setTradeAllocations(prev => mergeTradeAllocations(
+              prev.filter(allocation => !allocation.pnlId || nextPnl.some(record => record.id === allocation.pnlId)),
+              buildTradeAllocationsFromData(transactions, optionTransactions, nextPnl, tradeEvents),
+            ));
+        }
         else if (section === 'nav') { if (result.navData.length > 0) setNavData(result.navData); }
     } catch (e) { showToast("Error uploading " + section + ": " + (e as Error).message, 'error'); }
   };
@@ -1049,6 +1110,7 @@ const App: React.FC = () => {
         navData, optionTransactions,
         dividendData, interestData, cashLedger,
         tradeEvents,
+        tradeAllocations,
         snapshotFileName,
         benchmarkData
     );
@@ -1075,7 +1137,7 @@ const App: React.FC = () => {
           <button onClick={() => setActiveTab('nav')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'nav' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><TrendingUp size={20} /><span className="font-medium text-sm">Daily NAV</span></button>
           <button onClick={() => setActiveTab('pnl')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'pnl' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><LineChart size={20} /><span className="font-medium text-sm">Realized P&L</span></button>
           <button onClick={() => setActiveTab('transactions')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'transactions' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Layers size={20} /><span className="font-medium text-sm">Holdings</span></button>
-          <button onClick={() => setActiveTab('tradeEvents')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'tradeEvents' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><ListIcon size={20} /><span className="font-medium text-sm">Trading Analysis</span></button>
+          <button onClick={() => setActiveTab('tradeEvents')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'tradeEvents' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><ListIcon size={20} /><span className="font-medium text-sm">Trading History</span></button>
           <button onClick={() => setActiveTab('lookup')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'lookup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Table size={20} /><span className="font-medium text-sm">Lookup Data</span></button>
           <button onClick={() => setActiveTab('history')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'history' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}><Archive size={20} /><span className="font-medium text-sm">History</span></button>
 
@@ -1169,15 +1231,14 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'tradeEvents' && (
-              <TradingAnalysis
+              <TradingHistoryWorkspace
                 events={tradeEvents}
-                pnlData={pnlData}
-                lookupData={lookupData}
-                marketConstants={marketConstants}
-                onUploadHistory={(file) => handleSingleUpload('trade_events', file)}
-                onExportHistory={() => {
+                allocations={tradeAllocations}
+                asOfDate={marketConstants.date}
+                onUpload={(file) => handleSingleUpload('trade_events', file)}
+                onExport={() => {
                   const snapshotDate = formatDateInputValue(new Date()).replace(/-/g, '');
-                  exportTradeEventsToExcel(tradeEvents, `TradingHistory_${snapshotDate}.xlsx`);
+                  exportTradeEventsToExcel(tradeEvents, tradeAllocations, `TradingHistory_${snapshotDate}.xlsx`);
                 }}
               />
             )}

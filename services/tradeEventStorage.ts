@@ -1,9 +1,10 @@
-import { TradeEventData } from '../types';
+import { TradeEventAllocationData, TradeEventData } from '../types';
 
 const DATABASE_NAME = 'trade_tracker_storage';
 const DATABASE_VERSION = 1;
 const STORE_NAME = 'trade_events';
 const LEDGER_KEY = 'ledger';
+const ALLOCATIONS_KEY = 'allocations';
 
 const openDatabase = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
   const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
@@ -42,6 +43,37 @@ export const saveStoredTradeEvents = async (events: TradeEventData[]): Promise<v
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error || new Error('Unable to save Trade Events'));
       transaction.onabort = () => reject(transaction.error || new Error('Trade Events save was aborted'));
+    });
+  } finally {
+    database.close();
+  }
+};
+
+export const loadStoredTradeAllocations = async (): Promise<TradeEventAllocationData[]> => {
+  if (typeof indexedDB === 'undefined') return [];
+  const database = await openDatabase();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readonly');
+      const request = transaction.objectStore(STORE_NAME).get(ALLOCATIONS_KEY);
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+      request.onerror = () => reject(request.error || new Error('Unable to load Trade Event Allocations'));
+    });
+  } finally {
+    database.close();
+  }
+};
+
+export const saveStoredTradeAllocations = async (allocations: TradeEventAllocationData[]): Promise<void> => {
+  if (typeof indexedDB === 'undefined') return;
+  const database = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      transaction.objectStore(STORE_NAME).put(allocations, ALLOCATIONS_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('Unable to save Trade Event Allocations'));
+      transaction.onabort = () => reject(transaction.error || new Error('Trade Event Allocations save was aborted'));
     });
   } finally {
     database.close();
