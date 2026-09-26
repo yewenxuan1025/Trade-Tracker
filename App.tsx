@@ -14,7 +14,7 @@ import AnalyticsDashboard from './components/AnalyticsDashboard';
 import TradingHistoryWorkspace from './components/TradingHistoryWorkspace';
 import { parseExcelFile, parseBenchmarkFile, exportToExcel, exportTransactionsToExcel, exportTradeEventsToExcel, exportGlobalData, exportPnLToExcel, exportNavData, generateId, calculatePortfolioAnalysis, type ImportedExchangeRates } from './services/excelService';
 import { buildOptionPnlFields, isAssignmentOptionRecord } from './services/optionPnl';
-import { buildTradeAllocationsFromData, buildTradeEventsFromData, isSplitTransaction, markTradeEvents, mergeTradeAllocations, mergeTradeEvents, reconcileTradeAllocations, removeTradeAllocationsForPnl, tradeEventLinksToAllocations, transactionToTradeAllocation, transactionToTradeEvent } from './services/tradeEvents';
+import { buildTradeAllocationsFromData, buildTradeEventsFromData, getRawTradeEventId, isSplitTransaction, mergeTradeAllocations, mergeTradeEvents, reconcileTradeAllocations, removeTradeAllocationsForPnl, removeTradeAllocationsForTradeEvents, removeTradeEvents, tradeEventLinksToAllocations, transactionToTradeAllocation, transactionToTradeEvent } from './services/tradeEvents';
 import { loadStoredTradeAllocations, loadStoredTradeEvents, saveStoredTradeAllocations, saveStoredTradeEvents } from './services/tradeEventStorage';
 import { LookupSheetData, MarketConstants, StockData, TransactionData, TradeEventData, TradeEventAllocationData, PnLData, NavData, DividendData, InterestData, CashLedgerEntry, BenchmarkData, padHkTicker } from './types';
 
@@ -37,6 +37,25 @@ const enrichPnlRecord = (p: PnLData, lookup: LookupSheetData | null): PnLData =>
 
 const enrichPnlRecords = (records: PnLData[], lookup: LookupSheetData | null): PnLData[] =>
   records.map(p => enrichPnlRecord(p, lookup));
+
+const resolveRemovedTradeEventIds = (
+  allTransactions: TransactionData[],
+  transactionIdsToRemove: string[],
+): string[] => {
+  const removedTransactionIds = new Set(transactionIdsToRemove.map(String));
+  const remainingRawEventIds = new Set(
+    allTransactions
+      .filter(transaction => !removedTransactionIds.has(String(transaction.id)))
+      .map(transaction => String(getRawTradeEventId(transaction))),
+  );
+
+  return Array.from(new Set(
+    allTransactions
+      .filter(transaction => removedTransactionIds.has(String(transaction.id)))
+      .map(transaction => String(getRawTradeEventId(transaction)))
+      .filter(eventId => !remainingRawEventIds.has(eventId)),
+  ));
+};
 
 const STORAGE_KEY = 'trade_tracker_market_constants';
 const LOOKUP_DATA_KEY = 'trade_tracker_lookup_data';
@@ -893,15 +912,25 @@ const App: React.FC = () => {
       setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...updated } : t));
   }, []);
 
+  const removeTradeHistoryForDeletedTransactions = useCallback((
+    sourceTransactions: TransactionData[],
+    idsToRemove: string[],
+  ) => {
+    const eventIdsToRemove = resolveRemovedTradeEventIds(sourceTransactions, idsToRemove);
+    if (eventIdsToRemove.length === 0) return;
+    setTradeEvents(prev => removeTradeEvents(prev, eventIdsToRemove));
+    setTradeAllocations(prev => removeTradeAllocationsForTradeEvents(prev, eventIdsToRemove));
+  }, []);
+
   const handleDeleteTransaction = useCallback((idOrIds: string | string[]) => {
       const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
-      setTradeEvents(prev => markTradeEvents(prev, idsToRemove, 'Deleted'));
+      removeTradeHistoryForDeletedTransactions(transactions, idsToRemove);
       setTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
       setPnlData(prev => prev.map(record => record.linkedStockTransactionId && idSet.has(String(record.linkedStockTransactionId))
           ? { ...record, linkedStockTransactionId: undefined }
           : record));
-  }, []);
+  }, [removeTradeHistoryForDeletedTransactions, transactions]);
 
   const handleDuplicateTransaction = useCallback((id: string) => {
       setTransactions(prev => {
@@ -970,9 +999,9 @@ const App: React.FC = () => {
   const handleDeleteOptionTransaction = useCallback((idOrIds: string | string[]) => {
       const idsToRemove = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(String);
       const idSet = new Set(idsToRemove);
-      setTradeEvents(prev => markTradeEvents(prev, idsToRemove, 'Deleted'));
+      removeTradeHistoryForDeletedTransactions(optionTransactions, idsToRemove);
       setOptionTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
-  }, []);
+  }, [optionTransactions, removeTradeHistoryForDeletedTransactions]);
 
   const handleDuplicateOptionTransaction = useCallback((id: string) => {
       setOptionTransactions(prev => {
@@ -1174,7 +1203,7 @@ const App: React.FC = () => {
                   const idsToRemove = transactions
                     .filter(transaction => (transaction.stock || '').toUpperCase() === upper)
                     .map(transaction => String(transaction.id));
-                  setTradeEvents(prev => markTradeEvents(prev, idsToRemove, 'Deleted'));
+                  removeTradeHistoryForDeletedTransactions(transactions, idsToRemove);
                   setTransactions(prev => prev.filter(t => (t.stock || '').toUpperCase() !== upper));
                 }}
               />

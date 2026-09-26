@@ -4,7 +4,6 @@ import {
   TradeEventAllocationLeg,
   TradeEventAllocationSource,
   TradeEventData,
-  TradeEventRecordStatus,
   TransactionData,
 } from '../types';
 
@@ -527,24 +526,31 @@ export const mergeTradeEvents = (
       return;
     }
 
-    const preserveAuditStatus = current.recordStatus === 'Deleted';
     byId.set(id, {
       ...current,
       ...event,
-      recordStatus: preserveAuditStatus ? current.recordStatus : event.recordStatus,
     });
   });
 
-  return normalizeLegacySplitEvents(Array.from(byId.values())).sort(
-    (a, b) => (a.date || '').localeCompare(b.date || '') || String(a.id).localeCompare(String(b.id)),
-  );
+  return normalizeLegacySplitEvents(Array.from(byId.values()))
+    .filter(event => event.recordStatus !== 'Deleted')
+    .sort(
+      (a, b) => (a.date || '').localeCompare(b.date || '') || String(a.id).localeCompare(String(b.id)),
+    );
 };
 
-export const markTradeEvents = (
+export const removeTradeEvents = (
   events: TradeEventData[],
   ids: string[],
-  recordStatus: TradeEventRecordStatus,
 ): TradeEventData[] => {
   const idSet = new Set(ids.map(String));
-  return events.map(event => idSet.has(String(event.id)) ? { ...event, recordStatus } : event);
+  return events.filter(event => !idSet.has(String(event.id)));
+};
+
+export const removeTradeAllocationsForTradeEvents = (
+  allocations: TradeEventAllocationData[],
+  tradeEventIds: string[],
+): TradeEventAllocationData[] => {
+  const idSet = new Set(tradeEventIds.map(String));
+  return allocations.filter(allocation => !idSet.has(String(allocation.tradeEventId)));
 };
