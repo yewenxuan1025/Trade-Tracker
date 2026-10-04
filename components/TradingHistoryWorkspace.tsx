@@ -10,6 +10,8 @@ interface TradingHistoryWorkspaceProps {
   asOfDate?: string;
   onUpload: (file: File) => void;
   onExport: () => void;
+  onEditEvent: (id: string, updated: Partial<TradeEventData>) => void;
+  onDeleteEvent: (id: string) => void;
 }
 
 type View = 'events' | 'allocations';
@@ -20,6 +22,8 @@ const TradingHistoryWorkspace: React.FC<TradingHistoryWorkspaceProps> = ({
   asOfDate,
   onUpload,
   onExport,
+  onEditEvent,
+  onDeleteEvent,
 }) => {
   const [view, setView] = useState<View>('events');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -84,6 +88,8 @@ const TradingHistoryWorkspace: React.FC<TradingHistoryWorkspaceProps> = ({
             events={events}
             allocations={allocations}
             asOfDate={asOfDate}
+            onEditEvent={onEditEvent}
+            onDeleteEvent={onDeleteEvent}
           />
         ) : (
           <TradeEventAllocationsTable allocations={allocations} events={events} />

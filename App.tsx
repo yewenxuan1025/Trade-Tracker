@@ -69,6 +69,7 @@ const DIVIDEND_DATA_KEY = 'trade_tracker_dividends';
 const INTEREST_DATA_KEY = 'trade_tracker_interest';
 const CASH_LEDGER_KEY = 'trade_tracker_cash_ledger';
 const BENCHMARK_DATA_KEY = 'trade_tracker_benchmark_data';
+const DELETED_TRADE_EVENT_IDS_KEY = 'trade_tracker_deleted_trade_event_ids';
 
 const CASH_LEDGER_EXCLUDED_TYPES = new Set(['fx conversion', 'fx_conversion', 'fxconversion']);
 
@@ -202,6 +203,17 @@ const App: React.FC = () => {
   const [tradeEvents, setTradeEvents] = useState<TradeEventData[]>([]);
   const [tradeAllocations, setTradeAllocations] = useState<TradeEventAllocationData[]>([]);
   const [isTradeEventStorageReady, setIsTradeEventStorageReady] = useState(false);
+  const [deletedTradeEventIds, setDeletedTradeEventIds] = useState<string[]>(() => {
+    const saved = localStorage.getItem(DELETED_TRADE_EVENT_IDS_KEY);
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch (error) {
+      return [];
+    }
+  });
+  const deletedTradeEventIdSet = useMemo(() => new Set(deletedTradeEventIds), [deletedTradeEventIds]);
 
   const [pnlData, setPnlData] = useState<PnLData[]>(() => {
     const saved = localStorage.getItem(PNL_DATA_KEY);
@@ -313,6 +325,7 @@ const App: React.FC = () => {
   useEffect(() => localStorage.setItem(INTEREST_DATA_KEY, JSON.stringify(interestData)), [interestData]);
   useEffect(() => localStorage.setItem(CASH_LEDGER_KEY, JSON.stringify(cashLedger)), [cashLedger]);
   useEffect(() => localStorage.setItem(BENCHMARK_DATA_KEY, JSON.stringify(benchmarkData)), [benchmarkData]);
+  useEffect(() => localStorage.setItem(DELETED_TRADE_EVENT_IDS_KEY, JSON.stringify(deletedTradeEventIds)), [deletedTradeEventIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -349,9 +362,21 @@ const App: React.FC = () => {
   useEffect(() => {
     setTradeEvents(prev => mergeTradeEvents(
       prev,
-      buildTradeEventsFromData(transactions, optionTransactions, pnlData, false),
+      buildTradeEventsFromData(transactions, optionTransactions, pnlData, false)
+        .filter(event => !deletedTradeEventIdSet.has(String(event.id))),
     ));
-  }, [transactions, optionTransactions]);
+  }, [transactions, optionTransactions, deletedTradeEventIdSet]);
+
+  // Manual Trading History deletions are persisted separately from the ledger.
+  // This prevents the transaction synchronization above (or a later append)
+  // from recreating a record the user explicitly removed.
+  useEffect(() => {
+    if (deletedTradeEventIdSet.size === 0) return;
+    setTradeEvents(prev => {
+      const next = prev.filter(event => !deletedTradeEventIdSet.has(String(event.id)));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [deletedTradeEventIdSet, tradeEvents]);
 
   useEffect(() => {
     setTradeAllocations(prev => mergeTradeAllocations(
@@ -459,6 +484,7 @@ const App: React.FC = () => {
       setLookupData(result.lookup);
       setTransactions(nextTransactions);
       setOptionTransactions(nextOptionTransactions);
+      setDeletedTradeEventIds([]);
       setTradeEvents(nextTradeEvents);
       setTradeAllocations(nextTradeAllocations);
       setPnlData(nextPnlData);
@@ -1003,6 +1029,53 @@ const App: React.FC = () => {
       setOptionTransactions(prev => prev.filter(t => !idSet.has(String(t.id))));
   }, [optionTransactions, removeTradeHistoryForDeletedTransactions]);
 
+  const handleEditTradeEvent = useCallback((id: string, updated: Partial<TradeEventData>) => {
+    const eventId = String(id);
+    const currentEvent = tradeEvents.find(event => String(event.id) === eventId);
+    if (!currentEvent) return;
+
+    setTradeEvents(prev => prev.map(event => String(event.id) === eventId
+      ? { ...event, ...updated, id: event.id, assetType: event.assetType, eventOrigin: event.eventOrigin, recordStatus: event.recordStatus }
+      : event));
+
+    // If the history row is still an open holding, keep its source transaction
+    // aligned so the normal synchronization cannot overwrite the edit later.
+    const transactionUpdate: Partial<TransactionData> = {
+      stock: updated.stock,
+      name: updated.name,
+      market: updated.market,
+      action: updated.action,
+      price: updated.price,
+      shares: updated.shares,
+      date: updated.date,
+      commission: updated.commission,
+      total: updated.total,
+      source: updated.source,
+      option: updated.option,
+      expiration: updated.expiration,
+      strike: updated.strike,
+      exercise: updated.exercise,
+    };
+    const applyUpdate = (transaction: TransactionData): TransactionData => {
+      if (String(transaction.id) !== eventId) return transaction;
+      return Object.fromEntries(
+        Object.entries({ ...transaction, ...transactionUpdate }).filter(([, value]) => value !== undefined),
+      ) as unknown as TransactionData;
+    };
+    if (currentEvent.assetType === 'Option') {
+      setOptionTransactions(prev => prev.map(applyUpdate));
+    } else {
+      setTransactions(prev => prev.map(applyUpdate));
+    }
+  }, [tradeEvents]);
+
+  const handleDeleteTradeEvent = useCallback((id: string) => {
+    const eventId = String(id);
+    setDeletedTradeEventIds(prev => prev.includes(eventId) ? prev : [...prev, eventId]);
+    setTradeEvents(prev => removeTradeEvents(prev, [eventId]));
+    setTradeAllocations(prev => removeTradeAllocationsForTradeEvents(prev, [eventId]));
+  }, []);
+
   const handleDuplicateOptionTransaction = useCallback((id: string) => {
       setOptionTransactions(prev => {
           const original = prev.find(t => String(t.id) === String(id));
@@ -1128,7 +1201,7 @@ const App: React.FC = () => {
     const analysis = calculatePortfolioAnalysis(pnlData, transactions, lookupData, marketConstants, effectiveCash, optionPosition);
     const historyHk = analysis.g1Hk.filter(s => s.IsZero);
     const historyNonHk = analysis.g1NonHk.filter(s => s.IsZero);
-    const snapshotDate = formatDateInputValue(new Date()).replace(/-/g, '');
+    const snapshotDate = (normalizeDateInputValue(marketConstants.date) || formatDateInputValue(new Date())).replace(/-/g, '');
     const snapshotFileName = `TradeTracker_Record_${snapshotDate}.xlsx`;
 
     exportGlobalData(
@@ -1265,8 +1338,10 @@ const App: React.FC = () => {
                 allocations={tradeAllocations}
                 asOfDate={marketConstants.date}
                 onUpload={(file) => handleSingleUpload('trade_events', file)}
+                onEditEvent={handleEditTradeEvent}
+                onDeleteEvent={handleDeleteTradeEvent}
                 onExport={() => {
-                  const snapshotDate = formatDateInputValue(new Date()).replace(/-/g, '');
+                  const snapshotDate = (normalizeDateInputValue(marketConstants.date) || formatDateInputValue(new Date())).replace(/-/g, '');
                   exportTradeEventsToExcel(tradeEvents, tradeAllocations, `TradingHistory_${snapshotDate}.xlsx`);
                 }}
               />

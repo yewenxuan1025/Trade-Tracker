@@ -292,7 +292,9 @@ const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ pnlData, transactio
       const isBuy = action.includes('buy');
       const shares = Math.abs(t.shares || 0);
       const grossLocal = Math.abs((t.price || 0) * shares);
-      const commLocal = Math.abs(t.commission || 0);
+      // A negative commission represents a rebate and must reduce a buy cost
+      // (or increase sell proceeds), rather than being converted back to a fee.
+      const commLocal = Number(t.commission) || 0;
       const signedCashFlowLocal = isBuy ? -(grossLocal + commLocal) : (grossLocal - commLocal);
 
       const cur = byTicker.get(stock) || {

@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { Archive, CalendarDays, Search } from 'lucide-react';
+import { Archive, CalendarDays, Pencil, Search, Trash2, X } from 'lucide-react';
 import { TradeEventAllocationData, TradeEventData } from '../types';
+import ConfirmDialog from './ConfirmDialog';
 
 interface TradeEventsTableProps {
   events: TradeEventData[];
   allocations: TradeEventAllocationData[];
   asOfDate?: string;
+  onEditEvent: (id: string, updated: Partial<TradeEventData>) => void;
+  onDeleteEvent: (id: string) => void;
 }
 
 type DateFilter = 'All' | 'Week' | 'Month' | 'Year' | 'Custom';
@@ -32,13 +35,54 @@ const shiftUtcMonths = (date: Date, months: number): Date => {
   return shifted;
 };
 
-const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, allocations, asOfDate }) => {
+const TradeEventsTable: React.FC<TradeEventsTableProps> = ({
+  events,
+  allocations,
+  asOfDate,
+  onEditEvent,
+  onDeleteEvent,
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [assetType, setAssetType] = useState<'All' | 'Stock' | 'Option'>('All');
   const [recordStatus, setRecordStatus] = useState<'All' | TradeEventData['recordStatus']>('All');
   const [dateFilter, setDateFilter] = useState<DateFilter>('All');
   const [customFromDate, setCustomFromDate] = useState('');
   const [customToDate, setCustomToDate] = useState('');
+  const [editingEvent, setEditingEvent] = useState<TradeEventData | null>(null);
+  const [commissionInput, setCommissionInput] = useState('');
+  const [deleteEventId, setDeleteEventId] = useState<string | null>(null);
+
+  const openEditor = (event: TradeEventData) => {
+    setEditingEvent({ ...event });
+    setCommissionInput(String(event.commission ?? 0));
+  };
+
+  const updateEditingEvent = <K extends keyof TradeEventData>(key: K, value: TradeEventData[K]) => {
+    setEditingEvent(current => current ? { ...current, [key]: value } : current);
+  };
+
+  const handleEditSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingEvent) return;
+    const parsedCommission = parseFloat(commissionInput);
+    onEditEvent(String(editingEvent.id), {
+      stock: editingEvent.stock,
+      name: editingEvent.name,
+      market: editingEvent.market,
+      action: editingEvent.action,
+      price: Number(editingEvent.price) || 0,
+      shares: Number(editingEvent.shares) || 0,
+      date: editingEvent.date,
+      commission: Number.isFinite(parsedCommission) ? parsedCommission : 0,
+      total: Number(editingEvent.total) || 0,
+      source: editingEvent.source,
+      option: editingEvent.option,
+      expiration: editingEvent.expiration,
+      strike: Number(editingEvent.strike) || 0,
+      exercise: editingEvent.exercise,
+    });
+    setEditingEvent(null);
+  };
 
   const referenceDate = useMemo(() => {
     const configured = parseDateOnly(asOfDate);
@@ -216,10 +260,10 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, allocations
       </div>
 
       <div className="flex-1 overflow-auto custom-scrollbar">
-        <table className="min-w-[1550px] w-full text-left">
+        <table className="min-w-[1620px] w-full text-left">
           <thead className="sticky top-0 z-20 bg-slate-50">
             <tr className="border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
-              {['Date', 'Asset', 'Stock', 'Name', 'Market', 'Action', 'Price', 'Shares', 'Commission', 'Total', 'Source', 'Option', 'Expiration', 'Strike', 'Status', 'Linked P&L', 'Event ID'].map(label => (
+              {['Date', 'Asset', 'Stock', 'Name', 'Market', 'Action', 'Price', 'Shares', 'Commission', 'Total', 'Source', 'Option', 'Expiration', 'Strike', 'Status', 'Linked P&L', 'Event ID', 'Actions'].map(label => (
                 <th key={label} className="px-4 py-3 font-bold whitespace-nowrap">{label}</th>
               ))}
             </tr>
@@ -260,11 +304,31 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, allocations
                   {pnlLinksByEventId.get(String(event.id))?.label || (event.linkedPnlTradeNumber ? `#${event.linkedPnlTradeNumber}` : '')}
                 </td>
                 <td className="px-4 py-3 font-mono text-[10px] text-slate-400 max-w-[180px] truncate" title={String(event.id)}>{event.id}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => openEditor(event)}
+                      title="Edit trading history record"
+                      className="rounded-lg border border-slate-200 p-1.5 text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteEventId(String(event.id))}
+                      title="Delete trading history record"
+                      className="rounded-lg border border-red-200 p-1.5 text-red-500 hover:bg-red-50"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
             {filteredEvents.length === 0 && (
               <tr>
-                <td colSpan={17} className="px-6 py-16 text-center text-sm text-slate-400">
+                <td colSpan={18} className="px-6 py-16 text-center text-sm text-slate-400">
                   No trading history records match the current filters.
                 </td>
               </tr>
@@ -272,6 +336,58 @@ const TradeEventsTable: React.FC<TradeEventsTableProps> = ({ events, allocations
           </tbody>
         </table>
       </div>
+
+      {editingEvent && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b bg-slate-50 p-4">
+              <div>
+                <h3 className="font-extrabold uppercase tracking-tight text-slate-800">Edit Trading History</h3>
+                <p className="mt-0.5 font-mono text-[10px] text-slate-400">{editingEvent.id}</p>
+              </div>
+              <button type="button" onClick={() => setEditingEvent(null)} className="rounded-full p-1.5 hover:bg-slate-200"><X size={20} /></button>
+            </div>
+            <form onSubmit={handleEditSubmit} className="overflow-y-auto p-6">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Asset</label><input readOnly value={editingEvent.assetType} className="w-full rounded-lg border border-slate-100 bg-slate-50 p-2.5 text-sm text-slate-500" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Date</label><input required type="date" value={editingEvent.date || ''} onChange={event => updateEditingEvent('date', event.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Ticker</label><input required value={editingEvent.stock || ''} onChange={event => updateEditingEvent('stock', event.target.value.toUpperCase())} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm font-bold uppercase text-blue-600" /></div>
+                <div className="lg:col-span-2"><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Name</label><input value={editingEvent.name || ''} onChange={event => updateEditingEvent('name', event.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Market</label><input value={editingEvent.market || ''} onChange={event => updateEditingEvent('market', event.target.value.toUpperCase())} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm uppercase" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Action</label><select value={editingEvent.action || 'Buy'} onChange={event => updateEditingEvent('action', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"><option value="Buy">Buy</option><option value="Sell">Sell</option><option value="Short">Short</option><option value="Cover">Cover</option></select></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Price</label><input type="number" step="any" value={editingEvent.price ?? 0} onChange={event => updateEditingEvent('price', event.target.valueAsNumber)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Shares / Contracts</label><input type="number" step="any" value={editingEvent.shares ?? 0} onChange={event => updateEditingEvent('shares', event.target.valueAsNumber)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Commission</label><input type="text" inputMode="decimal" value={commissionInput} onChange={event => setCommissionInput(event.target.value)} placeholder="e.g. -1.25" className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Total</label><input type="number" step="any" value={editingEvent.total ?? 0} onChange={event => updateEditingEvent('total', event.target.valueAsNumber)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Source</label><input value={editingEvent.source || ''} onChange={event => updateEditingEvent('source', event.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                {editingEvent.assetType === 'Option' && (
+                  <>
+                    <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Option</label><select value={editingEvent.option || 'Call'} onChange={event => updateEditingEvent('option', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"><option value="Call">Call</option><option value="Put">Put</option></select></div>
+                    <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Expiration</label><input type="date" value={editingEvent.expiration || ''} onChange={event => updateEditingEvent('expiration', event.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                    <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Strike</label><input type="number" step="any" value={editingEvent.strike ?? 0} onChange={event => updateEditingEvent('strike', event.target.valueAsNumber)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                    <div><label className="mb-1 block text-[10px] font-extrabold uppercase text-slate-400">Exercise</label><input value={editingEvent.exercise || ''} onChange={event => updateEditingEvent('exercise', event.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 text-sm" /></div>
+                  </>
+                )}
+              </div>
+              <div className="mt-6 flex justify-end gap-3 border-t pt-5">
+                <button type="button" onClick={() => setEditingEvent(null)} className="rounded-xl px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-100">Cancel</button>
+                <button type="submit" className="rounded-xl bg-blue-600 px-7 py-2.5 text-sm font-extrabold text-white shadow-lg shadow-blue-200 hover:bg-blue-700">Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteEventId && (
+        <ConfirmDialog
+          message="Permanently delete this Trading History record? Linked P&L allocations for this record will also be removed."
+          onConfirm={() => {
+            onDeleteEvent(deleteEventId);
+            setDeleteEventId(null);
+          }}
+          onCancel={() => setDeleteEventId(null)}
+        />
+      )}
     </div>
   );
 };

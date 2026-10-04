@@ -81,6 +81,9 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   // Raw string states for shares inputs so the user can type '-' before digits
   const [txnSharesStr, setTxnSharesStr] = useState('0');
   const [optionSharesStr, setOptionSharesStr] = useState('0');
+  // Keep option commission as raw text while editing so a leading minus sign
+  // is not discarded by parseFloat before the user finishes typing.
+  const [optionCommissionStr, setOptionCommissionStr] = useState('0');
 
   const { showToast } = useToast();
 
@@ -331,7 +334,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
       const form = isOption ? optionForm : txnForm;
       const shares = parseFloat(isOption ? optionSharesStr : txnSharesStr) || 0;
       const price = form.price || 0;
-      const commission = form.commission || 0;
+      const parsedCommission = isOption ? parseFloat(optionCommissionStr) : Number(form.commission);
+      const commission = Number.isFinite(parsedCommission) ? parsedCommission : 0;
       const action = (form.action || 'Buy').toLowerCase();
       
       // Calculate Total (Cash Flow)
@@ -418,7 +422,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div><h2 className="text-lg font-bold text-slate-800">Stock Transactions</h2><p className="text-xs text-slate-500">{filtered.length} records</p></div>
                 <div className="flex gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Upload size={14} /><span>Upload</span></button>
-                  {onAppend && <button onClick={() => appendInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Plus size={14} /><span>Append</span></button>}
+                  {onAppend && <button onClick={() => { setSortConfig(null); setOptionSortConfig(null); appendInputRef.current?.click(); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Plus size={14} /><span>Append</span></button>}
                   <button onClick={() => { setEditingId(null); setTxnForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS' }); setTxnSharesStr(''); setIsModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Record</span></button>
                   
                   {selectedIds.size === 1 && (
@@ -502,14 +506,15 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => optionFileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Upload size={14} /><span>Upload History</span></button>
-                  <button onClick={() => { setEditingOptionId(null); setOptionForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No' }); setOptionSharesStr(''); setIsOptionModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Option</span></button>
+                  {onAppend && <button onClick={() => { setSortConfig(null); setOptionSortConfig(null); appendInputRef.current?.click(); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"><Plus size={14} /><span>Append</span></button>}
+                  <button onClick={() => { setEditingOptionId(null); setOptionForm({ stock: '', action: 'Buy', price: 0, shares: 0, date: new Date().toISOString().split('T')[0], commission: 0, source: 'IB AUS', option: 'Call', expiration: '', strike: 0, exercise: 'No' }); setOptionSharesStr(''); setOptionCommissionStr(''); setIsOptionModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium shadow-sm transition-all"><Plus size={14} /><span>Add Option</span></button>
                   
                   {selectedOptionIds.size === 1 && (
                     <>
                       {onDuplicateOptionTransaction && (
                         <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; onDuplicateOptionTransaction(id); setSelectedOptionIds(new Set()); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Copy size={14} /><span>Duplicate</span></button>
                       )}
-                      <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setOptionSharesStr(String(txn.shares)); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
+                      <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; const txn = optionTransactions.find(t => t.id === id); if(txn) { setEditingOptionId(txn.id); setOptionForm({...txn}); setOptionSharesStr(String(txn.shares)); setOptionCommissionStr(String(txn.commission ?? 0)); setIsOptionModalOpen(true); } }} className="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"><Pencil size={14}/></button>
                       {onSplitOptionTransaction && (
                         <button onClick={() => { const id = Array.from(selectedOptionIds)[0]; setSplittingOptionId(id); setIsOptionSplitModalOpen(true); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg text-xs font-bold transition-all shadow-sm"><Scissors size={14} /><span>Split</span></button>
                       )}
@@ -670,7 +675,7 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Exercise</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.exercise} onChange={e => setOptionForm({...optionForm, exercise: e.target.value})}>{EXERCISE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}</select></div>
                 
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Date</label><input required type="date" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.date} onChange={e => setOptionForm({...optionForm, date: e.target.value})}/></div>
-                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Commission</label><input type="number" step="0.01" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.commission} onChange={e => setOptionForm({...optionForm, commission: parseFloat(e.target.value)})}/></div>
+                <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Commission</label><input type="text" inputMode="decimal" className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionCommissionStr} onChange={e => setOptionCommissionStr(e.target.value)} placeholder="e.g. -1.25"/></div>
                 <div><label className="text-[10px] font-extrabold text-slate-400 uppercase mb-1 block">Source</label><select className="w-full border border-slate-200 rounded-lg p-2.5 text-sm" value={optionForm.source} onChange={e => setOptionForm({...optionForm, source: e.target.value})}><option value="IB AUS">IB AUS</option><option value="IB">IB</option><option value="Manual">Manual</option></select></div>
               </div>
               <div className="pt-6 border-t flex justify-end gap-3 mt-6">
