@@ -930,6 +930,8 @@ const App: React.FC = () => {
         assignmentStrike: txn.assignmentStrike,
         assignmentDate: txn.assignmentDate,
         rawTradeEventId: txn.rawTradeEventId,
+        executionTime: txn.executionTime,
+        importFingerprint: txn.importFingerprint,
     };
     setTransactions(prev => [...prev, newTxn]);
   }, [lookupData]);
@@ -1014,6 +1016,8 @@ const App: React.FC = () => {
         option: txn.option || 'Call', expiration: txn.expiration || '', strike: txn.strike || 0,
         exercise: txn.exercise || 'No',
         rawTradeEventId: txn.rawTradeEventId,
+        executionTime: txn.executionTime,
+        importFingerprint: txn.importFingerprint,
     };
     setOptionTransactions(prev => [...prev, newTxn]);
   }, [lookupData]);

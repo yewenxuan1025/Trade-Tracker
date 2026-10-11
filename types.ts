@@ -51,6 +51,8 @@ export interface TransactionData {
   assignmentStrike?: number;
   assignmentDate?: string;
   rawTradeEventId?: string;
+  executionTime?: string;
+  importFingerprint?: string;
   type?: string;
   category?: string;
   class?: string;
@@ -276,6 +278,8 @@ export const TRANSACTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Assignment Strike': 'assignmentStrike',
   'Assignment Date': 'assignmentDate',
   'Raw Trade Event ID': 'rawTradeEventId',
+  'Execution Time': 'executionTime',
+  'Import Fingerprint': 'importFingerprint',
   'Type': 'type',
   'Category': 'category',
   'Class': 'class'
@@ -298,7 +302,9 @@ export const OPTION_HEADER_MAP: Record<string, keyof TransactionData> = {
   'Expiration': 'expiration',
   'Strike': 'strike',
   'Exercise': 'exercise',
-  'Raw Trade Event ID': 'rawTradeEventId'
+  'Raw Trade Event ID': 'rawTradeEventId',
+  'Execution Time': 'executionTime',
+  'Import Fingerprint': 'importFingerprint'
 };
 
 export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
@@ -326,6 +332,8 @@ export const TRADE_EVENT_HEADER_MAP: Record<string, keyof TradeEventData> = {
   'Linked P&L ID': 'linkedPnlId',
   'Linked P&L No.': 'linkedPnlTradeNumber',
   'Raw Trade Event ID': 'rawTradeEventId',
+  'Execution Time': 'executionTime',
+  'Import Fingerprint': 'importFingerprint',
   'Parent Event ID': 'parentEventId',
   'Assignment Type': 'assignmentType',
   'Assignment Source': 'assignmentSource',

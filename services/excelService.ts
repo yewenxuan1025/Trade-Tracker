@@ -193,7 +193,9 @@ const TRANSACTION_EXPORT_MAP: Record<string, string> = {
     assignmentOptionType: 'Assignment Option Type',
     assignmentStrike: 'Assignment Strike',
     assignmentDate: 'Assignment Date',
-    rawTradeEventId: 'Raw Trade Event ID'
+    rawTradeEventId: 'Raw Trade Event ID',
+    executionTime: 'Execution Time',
+    importFingerprint: 'Import Fingerprint'
 };
 
 const OPTION_EXPORT_MAP: Record<string, string> = {
@@ -212,7 +214,9 @@ const OPTION_EXPORT_MAP: Record<string, string> = {
     expiration: 'Expiration',
     strike: 'Strike',
     exercise: 'Exercise',
-    rawTradeEventId: 'Raw Trade Event ID'
+    rawTradeEventId: 'Raw Trade Event ID',
+    executionTime: 'Execution Time',
+    importFingerprint: 'Import Fingerprint'
 };
 
 const TRADE_EVENT_EXPORT_MAP: Record<string, string> = {
@@ -239,6 +243,8 @@ const TRADE_EVENT_EXPORT_MAP: Record<string, string> = {
     linkedPnlId: 'Linked P&L ID',
     linkedPnlTradeNumber: 'Linked P&L No.',
     rawTradeEventId: 'Raw Trade Event ID',
+    executionTime: 'Execution Time',
+    importFingerprint: 'Import Fingerprint',
     parentEventId: 'Parent Event ID',
     assignmentType: 'Assignment Type',
     assignmentSource: 'Assignment Source',

@@ -2,8 +2,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { TransactionData, LookupSheetData, EXERCISE_OPTIONS } from '../types';
 import { generateId } from '../services/excelService';
-import { Search, Download, X, Plus, Pencil, Upload, ArrowUp, ArrowDown, Trash2, Copy, Scissors } from 'lucide-react';
+import { Search, Download, X, Plus, Pencil, Upload, ArrowUp, ArrowDown, Trash2, Copy, Scissors, ImageUp, ShieldCheck, ClipboardPaste } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
+import IbScreenshotCollectorModal from './IbScreenshotCollectorModal';
+import IbScreenshotImportModal from './IbScreenshotImportModal';
 import { useToast } from './Toast';
 
 interface TransactionTableProps {
@@ -28,7 +30,7 @@ interface TransactionTableProps {
   onSplitOptionTransaction?: (originalId: string, split1: { shares: number; commission: number; total: number }, split2: { shares: number; commission: number; total: number }) => void;
 }
 
-const TransactionTable: React.FC<TransactionTableProps> = ({ 
+const TransactionTable: React.FC<TransactionTableProps> = ({
     transactions = [], 
     optionTransactions = [],
     lookupData, 
@@ -55,6 +57,8 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const appendInputRef = useRef<HTMLInputElement>(null);
+  const [isScreenshotCollectorOpen, setIsScreenshotCollectorOpen] = useState(false);
+  const [screenshotFiles, setScreenshotFiles] = useState<File[]>([]);
 
   const [colWidths, setColWidths] = useState<Record<string, number>>({
     stock: 110, name: 160, market: 80, action: 80, price: 100, shares: 100, date: 105, commission: 85, total: 115, source: 120, lastPrice: 100, lastMv: 115,
@@ -411,6 +415,21 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
 
   return (
     <div className="flex flex-col gap-8 pb-20">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 shadow-sm">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-black text-slate-800"><ImageUp size={18} className="text-blue-600" /> Add This Week&apos;s IB Trades</h2>
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><ShieldCheck size={13} className="text-emerald-600" /> Local screenshot OCR · adds stock and option trades to Holdings · overlapping screenshots are deduplicated</p>
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs font-bold text-blue-700"><ClipboardPaste size={13} /> Build one batch by selecting, dropping, or repeatedly pasting screenshots</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsScreenshotCollectorOpen(true)}
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-blue-700"
+        >
+          <ImageUp size={15} /> Add IB Screenshots
+        </button>
+      </div>
+
       {/* --- STOCK TRANSACTIONS --- */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-[600px] relative">
         <input type="file" ref={fileInputRef} onChange={(e) => { if(e.target.files?.[0]) onUpload(e.target.files[0]); e.target.value = ''; }} accept=".xlsx, .xls" className="hidden" />
@@ -799,6 +818,25 @@ const TransactionTable: React.FC<TransactionTableProps> = ({
           message={confirmState.message}
           onConfirm={confirmState.onConfirm}
           onCancel={() => setConfirmState(null)}
+        />
+      )}
+      {isScreenshotCollectorOpen && (
+        <IbScreenshotCollectorModal
+          onRecognize={files => {
+            setIsScreenshotCollectorOpen(false);
+            setScreenshotFiles(files);
+          }}
+          onClose={() => setIsScreenshotCollectorOpen(false)}
+        />
+      )}
+      {screenshotFiles.length > 0 && onAddOptionTransaction && (
+        <IbScreenshotImportModal
+          files={screenshotFiles}
+          lookupData={lookupData}
+          existingTransactions={[...transactions, ...optionTransactions]}
+          onAddStock={onAddTransaction}
+          onAddOption={onAddOptionTransaction}
+          onClose={() => setScreenshotFiles([])}
         />
       )}
     </div>

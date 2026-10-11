@@ -4,8 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "copy:ocr-assets": "node scripts/copy-ocr-assets.mjs",
+    "predev": "npm run copy:ocr-assets",
     "dev": "vite",
+    "prebuild": "npm run copy:ocr-assets",
     "build": "vite build",
+    "prepreview": "npm run copy:ocr-assets",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -13,9 +17,12 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recharts": "^3.7.0",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@tesseract.js-data/chi_sim": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.21",

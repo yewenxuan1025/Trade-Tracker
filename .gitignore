@@ -15,6 +15,10 @@ dist-ssr
 # Private trading records and generated reconciliation outputs
 Trading History/
 outputs/
+Trading History.zip
+
+# Generated offline OCR runtime assets (copied from npm dependencies)
+public/ocr/
 
 # Editor directories and files
 .vscode/*
